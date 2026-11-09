@@ -6,8 +6,11 @@
 // - NO-NETWORK: the places where Excalidraw goes online by itself are made to stay offline (see NETWORK_PATCHES).
 // - NOTICES: main.js ends with Excaliboard's licence and THIRD-PARTY-NOTICES.md, because Obsidian installs no other
 //   file with it (`npm run notices` rewrites that file from what this build bundles).
-// - SIZE: main.js stays under 5 MB, the largest file Obsidian Sync's Standard plan syncs (see dropLocales), or the
-//   build fails.
+// - SIZE: main.js stays under 5 MB, the largest file Obsidian Sync's Standard plan syncs (see dropLocales and
+//   replaceSubsetting), or the build fails.
+// - NO-NODE, NO-STORAGE and NO-DYNAMIC-CODE: main.js doesn't use Node's file system (every file goes through
+//   Obsidian's vault API), keeps nothing in the window's localStorage and runs no generated code (eval, new
+//   Function); the build fails if one comes back (see FORBIDDEN, STORAGE_PATCHES, replaceSubsetting, lodashGlobal).
 // - Our own code isn't minified, so the code a vault runs stays readable; the libraries ship as they are published.
 // `npm run dev` rebuilds on every change; set TEST_VAULT=/path/to/vault to build into its plugin folder instead.
 import esbuild from 'esbuild';
@@ -141,6 +144,24 @@ const NETWORK_PATCHES = [
   },
 ];
 const networkCounts = new Map();
+
+/**
+ * NO-STORAGE: Excalidraw keeps two things in the window's localStorage, which every vault shares: the form of the
+ * library's Publish dialog and the text of its Mermaid dialog, both left out of Excaliboard. They are kept in memory
+ * instead, until Obsidian quits. Each pattern must match exactly four times in Excalidraw 0.18.1.
+ */
+const MEMORY_STORAGE =
+  'var excaliboardMemoryStorage=(()=>{let items=new Map;return{getItem:key=>items.has(key)?items.get(key):null,' +
+  'setItem:(key,value)=>{items.set(key,String(value))},removeItem:key=>{items.delete(key)}}})();\n';
+const STORAGE_PATCHES = [
+  { name: 'storage', pattern: /window\.localStorage\./g, replace: 'excaliboardMemoryStorage.' },
+  {
+    name: 'storage messages',
+    pattern: /`localStorage\.(getItem|setItem|removeItem) error: /g,
+    replace: '`storage.$1 error: ',
+  },
+];
+const storageCounts = new Map();
 const embedFonts = {
   name: 'embed-excalidraw-fonts',
   setup(build) {
@@ -165,6 +186,14 @@ const embedFonts = {
           networkCounts.set(name, (networkCounts.get(name) ?? 0) + 1);
           return replace.replace(/\$(\d)/g, (_, i) => match[Number(i)]);
         });
+      let stored = false;
+      for (const { name, pattern, replace } of STORAGE_PATCHES)
+        contents = contents.replace(pattern, (...match) => {
+          storageCounts.set(name, (storageCounts.get(name) ?? 0) + 1);
+          stored = true;
+          return replace.replace(/\$(\d)/g, (_, i) => match[Number(i)]);
+        });
+      if (stored) contents = MEMORY_STORAGE + contents;
       return { contents, loader: 'js' };
     });
   },
@@ -192,14 +221,75 @@ const dropLocales = {
   },
 };
 
+/**
+ * NO-DYNAMIC-CODE and SIZE: Excalidraw's font subsetting (HarfBuzz and WOFF2 compiled to WebAssembly, 1.85 MB of main.js,
+ * run through code it generates with new Function) only makes SVG exports smaller, holding just the letters they use.
+ * Its two modules become a stand-in that puts each font in whole, as Excalidraw itself does when subsetting fails.
+ */
+const SUBSET_STAND_IN = `
+export const Commands = { Subset: 'SUBSET' };
+export const toBase64 = async (arrayBuffer) => {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return 'data:font/woff2;base64,' + btoa(binary);
+};
+export const subsetToBase64 = (arrayBuffer) => toBase64(arrayBuffer);
+export const subsetToBinary = async (arrayBuffer) => arrayBuffer;
+export const WorkerUrl = undefined;
+`;
+let subsetCount = 0;
+const replaceSubsetting = {
+  name: 'replace-excalidraw-subsetting',
+  setup(build) {
+    build.onResolve({ filter: /^\.\/subset-(shared|worker)\.chunk\.js$/ }, (args) =>
+      /[\\/]@excalidraw[\\/]excalidraw[\\/]dist[\\/]prod[\\/]/.test(args.importer)
+        ? { path: args.path, namespace: 'excalidraw-subset' }
+        : undefined,
+    );
+    build.onLoad({ filter: /.*/, namespace: 'excalidraw-subset' }, () => {
+      subsetCount++;
+      return { contents: SUBSET_STAND_IN, loader: 'js' };
+    });
+  },
+};
+
+/** NO-DYNAMIC-CODE: lodash finds the global object with Function("return this")() where it has no `self`. */
+let lodashCount = 0;
+const lodashGlobal = {
+  name: 'lodash-global',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]node_modules[\\/]lodash\.(throttle|debounce)[\\/]index\.js$/ }, async (args) => {
+      const contents = (await readFile(args.path, 'utf8')).replace(/Function\(['"]return this['"]\)\(\)/g, () => {
+        lodashCount++;
+        return 'globalThis';
+      });
+      return { contents, loader: 'js' };
+    });
+  },
+};
+/** NO-NODE, NO-STORAGE and NO-DYNAMIC-CODE: what main.js must not hold. */
+const FORBIDDEN = [
+  [
+    /\brequire\(\s*["'`](node:)?(fs|fs\/promises|original-fs)["'`]\s*\)/,
+    "NO-NODE: main.js uses Node's file system again.",
+  ],
+  [/\b(local|session)Storage\b/, "NO-STORAGE: main.js uses the window's localStorage or sessionStorage again."],
+  [
+    /\bnew Function\b|\bFunction\(\s*["'`]|\beval\(/,
+    'NO-DYNAMIC-CODE: main.js runs generated code again (eval, new Function).',
+  ],
+];
+
 /** styles.css: esbuild writes the CSS it collects (Excalidraw's and ours) to main.css; Obsidian loads styles.css. */
 const postBuild = {
   name: 'post-build',
   setup(build) {
     build.onStart(() => {
-      fontCounts.embedded = fontCounts.local = localeCount = 0;
+      fontCounts.embedded = fontCounts.local = localeCount = subsetCount = lodashCount = 0;
       fontCounts.marked = [];
       networkCounts.clear();
+      storageCounts.clear();
     });
     build.onEnd(async (result) => {
       if (result.errors.length) return;
@@ -216,11 +306,18 @@ const postBuild = {
             NETWORK_PATCHES.filter(({ name }) => networkCounts.get(name) !== 1).map(
               ({ name }) => `NO-NETWORK: Excalidraw's code for "${name}" wasn't found once: has its build changed?`,
             )[0] ??
-            (!localeCount
-              ? "SIZE: no translation of Excalidraw's was left out: has Excalidraw changed how it loads them?"
-              : js.length > MAX_MAIN_JS
-                ? `SIZE: main.js is ${js.length} bytes, over the ${MAX_MAIN_JS} that Obsidian Sync's Standard plan syncs.`
-                : undefined));
+            STORAGE_PATCHES.filter(({ name }) => storageCounts.get(name) !== 4).map(
+              ({ name }) => `NO-STORAGE: Excalidraw's code for "${name}" wasn't found 4 times: has its build changed?`,
+            )[0] ??
+            (subsetCount !== 2
+              ? "NO-DYNAMIC-CODE: Excalidraw's two font subsetting modules weren't both replaced: has its build changed?"
+              : lodashCount !== 2
+                ? 'NO-DYNAMIC-CODE: lodash\'s Function("return this")() wasn\'t found in throttle and debounce once each.'
+                : !localeCount
+                  ? "SIZE: no translation of Excalidraw's was left out: has Excalidraw changed how it loads them?"
+                  : js.length > MAX_MAIN_JS
+                    ? `SIZE: main.js is ${js.length} bytes, over the ${MAX_MAIN_JS} that Obsidian Sync's Standard plan syncs.`
+                    : FORBIDDEN.find(([pattern]) => pattern.test(js.toString('utf8')))?.[1]));
       if (problem) {
         await rm(path.join(outdir, 'main.css'), { force: true }); // no stylesheet from a build that failed
         throw new Error(problem);
@@ -257,7 +354,7 @@ const options = {
   legalComments: 'none', // the footer holds every licence, where esbuild would keep only some
   sourcemap: watch ? 'inline' : false,
   logLevel: 'info',
-  plugins: [embedFonts, dropLocales, postBuild],
+  plugins: [embedFonts, dropLocales, replaceSubsetting, lodashGlobal, postBuild],
 };
 
 await mkdir(outdir, { recursive: true });

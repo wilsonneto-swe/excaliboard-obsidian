@@ -119,7 +119,8 @@ let plugin: {
   readOnly: boolean;
   loadEditor: ReturnType<typeof vi.fn>;
   backup: ReturnType<typeof vi.fn>;
-  writeNow: ReturnType<typeof vi.fn>;
+  writeDrawing: ReturnType<typeof vi.fn>;
+  recover: ReturnType<typeof vi.fn>;
   rememberView: ReturnType<typeof vi.fn>;
   viewStates: ViewStateStore;
 };
@@ -142,10 +143,14 @@ beforeEach(() => {
   plugin = {
     readOnly: false,
     loadEditor: vi.fn(async () => lib),
-    backup: vi.fn((path: string, text: string) => {
+    // BACKUP: takes a while, like a write to disk; done before the save's own write, which waits for it.
+    backup: vi.fn(async (path: string, text: string) => {
+      await new Promise((resolve) => window.setTimeout(resolve, 10));
       backupLog.push({ path, text, writesBefore: app.vault.writes.length });
     }),
-    writeNow: vi.fn((path: string, data: string) => app.vault.diskWrite(path, data)),
+    // SAFE-WRITE: the plugin's safe write, whose last step is Obsidian's own write.
+    writeDrawing: vi.fn((_path: string, _text: string, _expected: string, write: () => Promise<void>) => write()),
+    recover: vi.fn(async () => false),
     rememberView: vi.fn(),
     viewStates: new ViewStateStore(null),
   };
@@ -314,40 +319,65 @@ describe('FLUSH: flush before unmount', () => {
     expect(view.getViewData()).toBe(EMPTY_SCENE);
   });
 
-  it("quitting the app writes the pending edit (Obsidian's quit hook)", async () => {
+  it('quitting the app writes the pending edit once the save it waits for is done (main.ts SAFE-WRITE)', async () => {
     const { view, editor } = await open();
     editor.init();
     editor.edit();
-    // What Obsidian's workspace does on "quit" for every TextFileView. Obsidian destroys the window 3 s later, and a
-    // hidden window's timers are throttled, so the write must not wait for any timer.
-    expect(view.dirty || view.saving || view.data !== view.lastSavedData).toBe(true);
-    const saving = view.save();
-    for (let i = 0; i < 5; i++) await Promise.resolve(); // microtasks only, no timers
+    // What the plugin's quit task does, which Obsidian waits for before it closes the window.
+    expect(view.hasUnsavedEdit()).toBe(true);
+    await view.save();
     expect(app.vault.writes).toHaveLength(1);
     expect(written().elements[0]!.x).toBe(110);
-    await saving;
   });
 });
 
-describe('SYNC-WRITE', () => {
-  it('the write gets what Obsidian last read, so a version changed behind its back can be backed up', async () => {
+describe('SAFE-WRITE', () => {
+  it("a save is Obsidian's own write, through the plugin's safe write, which gets what Obsidian last read", async () => {
     const { view, editor } = await open();
     editor.init();
     editor.edit();
     await view.save();
-    expect(plugin.writeNow).toHaveBeenCalledWith(PATH, expect.stringContaining('"type": "excalidraw"'), SAMPLE);
-  });
-
-  it("if the synchronous write fails, Obsidian's own write is used instead", async () => {
-    plugin.writeNow.mockImplementationOnce(() => {
-      throw new Error('EACCES');
-    });
-    const { view, editor } = await open();
-    editor.init();
-    editor.edit();
-    await view.save();
+    expect(plugin.writeDrawing).toHaveBeenCalledWith(
+      PATH,
+      expect.stringContaining('"type": "excalidraw"'),
+      SAMPLE,
+      expect.any(Function),
+    );
     expect(app.vault.writes).toHaveLength(1);
     expect(written().elements[0]!.x).toBe(110);
+  });
+
+  it('a failed write leaves the edit unsaved, for the next save', async () => {
+    const { view, editor } = await open();
+    editor.init();
+    editor.edit();
+    app.vault.adapter.failWrites = new RegExp(PATH);
+    await expect(view.save()).rejects.toThrow('EACCES');
+    expect(view.hasUnsavedEdit()).toBe(true);
+    app.vault.adapter.failWrites = null;
+    await view.save();
+    expect(written().elements[0]!.x).toBe(110);
+    expect(view.hasUnsavedEdit()).toBe(false);
+  });
+
+  it('a drawing that cannot be read asks the plugin for the copy of a write that quitting cut off', async () => {
+    const { file } = await open(SAMPLE.slice(0, 400));
+    expect(plugin.recover).toHaveBeenCalledWith(file);
+    plugin.recover.mockClear();
+    await open(); // one that reads fine needs nothing
+    expect(plugin.recover).not.toHaveBeenCalled();
+  });
+
+  it('tells whether an edit is waiting for its save', async () => {
+    const { view, editor } = await open();
+    editor.init();
+    expect(view.hasUnsavedEdit()).toBe(false);
+    editor.panZoomSelect();
+    expect(view.hasUnsavedEdit()).toBe(false);
+    editor.edit();
+    expect(view.hasUnsavedEdit()).toBe(true);
+    await view.save();
+    expect(view.hasUnsavedEdit()).toBe(false);
   });
 });
 
@@ -387,11 +417,10 @@ describe('OUTSIDE-CHANGE', () => {
     editor.init();
     editor.edit('rect-1', 10);
     app.vault.externalWrite(file, theirVersion());
-    await tick();
+    await vi.waitFor(() => expect(app.vault.writes).toHaveLength(1));
     expect(editor.updates).toBe(0);
     expect(backupLog.map((b) => b.text)).toContain(theirVersion());
     expect(Notice.messages.at(-1)).toMatch(/changed on disk.*version from disk is in the session backups/);
-    expect(app.vault.writes).toHaveLength(1);
     expect(written().elements[0]!.x).toBe(110);
     expect(await app.vault.read(file)).toBe(view.getViewData());
   });
@@ -688,10 +717,8 @@ describe('Obsidian integration', () => {
     editor.init();
     editor.edit('rect-1', 10);
     moved(view.contentEl, {});
-    await tick();
-    await tick();
+    await vi.waitFor(() => expect(editor.unmounted).toBe(true));
     expect(written().elements[0]!.x).toBe(110);
-    expect(editor.unmounted).toBe(true);
     expect(view.contentEl.textContent).toMatch(/separate window/);
     moved(view.contentEl, window);
     await tick();
@@ -747,7 +774,7 @@ describe('READ-ONLY on phones and tablets', () => {
     expect(editor.props.viewMode).toBe(true);
     expect(view.actions.map((a) => [a.icon, a.title])).toEqual([['pencil-off', 'Read-only on this device']]);
     view.actions[0]!.callback(new MouseEvent('click'));
-    expect(Notice.messages).toEqual([expect.stringMatching(/^Drawings are read-only on phones and tablets/)]);
+    expect(Notice.messages).toEqual([expect.stringMatching(/shows them read-only on phones and tablets/)]);
   });
 
   it('writes and backs up nothing: no change that Excalidraw reports counts as an edit', async () => {
@@ -761,7 +788,7 @@ describe('READ-ONLY on phones and tablets', () => {
     await view.save();
     await view.onClose();
     expect(app.vault.writes).toEqual([]);
-    expect(plugin.writeNow).not.toHaveBeenCalled();
+    expect(plugin.writeDrawing).not.toHaveBeenCalled();
     expect(plugin.backup).not.toHaveBeenCalled();
     expect(await app.vault.read(file)).toBe(SAMPLE);
   });
@@ -786,7 +813,7 @@ describe('READ-ONLY on phones and tablets', () => {
     await expect(view.writeData(file as never, '{}', SAMPLE)).rejects.toThrow(
       'sample.excalidraw is read-only on this device',
     );
-    expect(plugin.writeNow).not.toHaveBeenCalled();
+    expect(plugin.writeDrawing).not.toHaveBeenCalled();
     expect(app.vault.writes).toEqual([]);
   });
 

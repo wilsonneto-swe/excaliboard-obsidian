@@ -157,15 +157,15 @@ export class TFile extends TAbstractFile {
 }
 
 export class TFolder extends TAbstractFile {
+  vault: Vault | null = null;
   isRoot() {
     return this.path === '/';
   }
-}
-
-export class FileSystemAdapter {
-  basePath = '/vault';
-  getFullPath(path: string) {
-    return `${this.basePath}/${path}`;
+  /** The folders and files directly in this one. */
+  get children(): TAbstractFile[] {
+    const parentOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '/');
+    const all = this.vault ? [...this.vault.folders.values(), ...this.vault.contents.keys()] : [];
+    return all.filter((f) => f.path !== '/' && parentOf(f.path) === this.path);
   }
 }
 
@@ -186,11 +186,52 @@ class Events {
   }
 }
 
+/**
+ * Obsidian's vault adapter, in memory: the vault's files as they are on disk (a byte order mark stays), and the
+ * plugin's own files under the config folder. Writes to a path that `failWrites` matches fail; `log` lists each change.
+ */
+export class DataAdapter {
+  files = new Map<string, string>();
+  folders = new Set<string>();
+  log: string[] = [];
+  failWrites: RegExp | null = null;
+  constructor(private readonly vault: Vault) {}
+  private vaultFile(path: string) {
+    return [...this.vault.contents.keys()].find((f) => f.path === path);
+  }
+  async exists(path: string) {
+    return this.files.has(path) || this.folders.has(path) || !!this.vaultFile(path);
+  }
+  async read(path: string) {
+    const file = this.vaultFile(path);
+    const text = file ? this.vault.contents.get(file) : this.files.get(path);
+    if (text === undefined) throw new Error(`ENOENT: no such file, open '${path}'`);
+    return text;
+  }
+  async write(path: string, data: string) {
+    if (this.failWrites?.test(path)) throw new Error(`ENOSPC: no space left on device, write '${path}'`);
+    this.log.push(`write ${path}`);
+    this.files.set(path, data);
+  }
+  async mkdir(path: string) {
+    if (this.failWrites?.test(path)) throw new Error(`EEXIST: file already exists, mkdir '${path}'`);
+    for (let p = path; p; p = p.slice(0, Math.max(0, p.lastIndexOf('/')))) this.folders.add(p);
+  }
+  async list(path: string) {
+    const files = [...this.files.keys()].filter((p) => p.slice(0, p.lastIndexOf('/')) === path);
+    return { files, folders: [] as string[] };
+  }
+  async remove(path: string) {
+    if (!this.files.delete(path)) throw new Error(`ENOENT: no such file, unlink '${path}'`);
+    this.log.push(`remove ${path}`);
+  }
+}
+
 export class Vault extends Events {
-  adapter = new FileSystemAdapter();
+  adapter: DataAdapter = new DataAdapter(this);
   configDir = '.obsidian';
   contents = new Map<TFile, string>();
-  folders = new Map<string, TFolder>([['/', new TFolder('/')]]);
+  folders = new Map<string, TFolder>([['/', Object.assign(new TFolder('/'), { vault: this })]]);
   writes: { path: string; data: string }[] = [];
   add(path: string, data: string) {
     const file = new TFile(path);
@@ -200,9 +241,6 @@ export class Vault extends Events {
   getAbstractFileByPath(path: string): TAbstractFile | null {
     return [...this.contents.keys()].find((f) => f.path === path) ?? this.folders.get(path) ?? null;
   }
-  getAllLoadedFiles(): TAbstractFile[] {
-    return [...this.folders.values(), ...this.contents.keys()];
-  }
   getRoot() {
     return this.folders.get('/')!;
   }
@@ -210,11 +248,14 @@ export class Vault extends Events {
     if (this.getAbstractFileByPath(path)) throw new Error('File already exists.');
     return this.add(path, data);
   }
-  /** As on macOS and Windows, a folder whose path differs only in case already exists. */
+  /** As on macOS and Windows, a folder whose path differs only in case already exists. Missing parents are made too. */
   async createFolder(path: string) {
     if ([...this.folders.keys()].some((p) => p.toLowerCase() === path.toLowerCase()))
       throw new Error('Folder already exists.');
-    const folder = new TFolder(path);
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : null;
+    if (parent && ![...this.folders.keys()].some((p) => p.toLowerCase() === parent.toLowerCase()))
+      await this.createFolder(parent);
+    const folder = Object.assign(new TFolder(path), { vault: this });
     this.folders.set(path, folder);
     return folder;
   }
@@ -226,9 +267,11 @@ export class Vault extends Events {
   cachedRead(file: TFile) {
     return this.read(file);
   }
-  /** Obsidian's own write: async (queued behind the adapter, written in chunks), then a modify event. */
+  /** Obsidian's own write: async (queued behind the adapter, written in pieces), then a modify event. */
   async modify(file: TFile, data: string) {
     await new Promise((resolve) => window.setTimeout(resolve, 5));
+    if (this.adapter.failWrites?.test(file.path)) throw new Error(`EACCES: permission denied, open '${file.path}'`);
+    this.adapter.log.push(`write ${file.path}`);
     this.writes.push({ path: file.path, data });
     this.contents.set(file, data);
     this.trigger('modify', file);
@@ -270,6 +313,9 @@ export class Workspace extends Events {
     const leaf = new WorkspaceLeaf(kind);
     this.leaves.push(leaf);
     return leaf;
+  }
+  getLeavesOfType(type: string) {
+    return this.leaves.filter((leaf) => (leaf.view as { getViewType?: () => string } | null)?.getViewType?.() === type);
   }
   onLayoutReady(callback: () => unknown) {
     if (this.layoutReady) callback();
@@ -376,6 +422,10 @@ export class Plugin {
   }
   registerEvent(ref: unknown) {
     this.refs.push(ref);
+  }
+  registerDomEvent(el: EventTarget, type: string, callback: (event: Event) => unknown) {
+    el.addEventListener(type, callback);
+    this.refs.push(() => el.removeEventListener(type, callback));
   }
 }
 

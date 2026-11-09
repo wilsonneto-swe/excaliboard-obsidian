@@ -12,15 +12,18 @@
  *    settings, or where Obsidian puts new notes; "New drawing" in a folder's menu makes it in that folder. It opens in
  *    Excaliboard even when another plugin claims .excalidraw files.
  *  - EXPORT: "Export image" (command, and the tab's menu in view.ts) opens Excalidraw's export dialog.
- *  - SYNC-WRITE and BACKUP: Node's fs, synchronously (writeNow, backup); the reasons are in view.ts.
- *  - MOBILE: Node's fs exists only in Obsidian's desktop app, so on phones and tablets drawings open read-only
- *    (view.ts READ-ONLY): Excalidraw in view mode, and no new drawings, export or settings. Node is never reached there.
+ *  - SAFE-WRITE and BACKUP: a drawing is written by Obsidian's own write, after a copy of its new version, which puts
+ *    it back if quitting cut that write off (writeDrawing, recover); session backups (backup). Every file goes through
+ *    Obsidian's vault API: Excaliboard never uses Node. An edit waiting for its save is saved when Obsidian's window
+ *    loses focus or is hidden, and before it closes (saveDrawings).
+ *  - MOBILE: on phones and tablets drawings open read-only (view.ts READ-ONLY): Excalidraw in view mode, and no new
+ *    drawings, export or settings. Editing there, with touch and an app the system can suspend at any time, is yet to
+ *    be designed and tested.
  *  - VIEW-STATE: scroll and zoom per drawing in data.json (view-state.ts), following renames and deletes, written
  *    1.5 s after a change, or when Obsidian quits with a change still waiting. A data.json changed by sync is read again.
  */
 import './styles.css';
 import {
-  FileSystemAdapter,
   Notice,
   Platform,
   Plugin,
@@ -35,7 +38,7 @@ import {
 import { EXTENSION, ICON, NEW_DRAWING_NAME, PLUGIN_NAME, VIEW_TYPE } from './constants';
 import type * as Editor from './editor';
 import type { ViewState } from './editor';
-import { EMPTY_SCENE } from './scene';
+import { EMPTY_SCENE, parseScene } from './scene';
 import { DEFAULT_SETTINGS, SettingsTab, type Settings } from './settings';
 import { ExcalidrawFileView } from './view';
 import { ViewStateStore } from './view-state';
@@ -53,22 +56,9 @@ type Internals = {
 
 export type EditorModule = typeof Editor;
 
-type NodeFs = {
-  readFileSync(path: string, encoding: 'utf8'): string;
-  writeFileSync(path: string, data: string): void;
-  mkdirSync(path: string, options: { recursive: boolean }): void;
-  readdirSync(path: string): string[];
-  unlinkSync(path: string): void;
-};
-/** Node's fs, which Obsidian's desktop app exposes to plugins, and only it (MOBILE). */
-const nodeFs = (): NodeFs => {
-  if (!Platform.isDesktopApp) throw new Error(`${PLUGIN_NAME} writes files only in Obsidian's desktop app`);
-  return (window as unknown as { require: (id: string) => NodeFs }).require('fs');
-};
-
 /**
- * MOBILE: whether drawings open read-only here. They do in Obsidian's mobile app, which has no Node, and in the
- * desktop app's mobile emulation (app.emulateMobile), which shows what a phone shows.
+ * MOBILE: whether drawings open read-only here. They do in Obsidian's mobile app, and in the desktop app's mobile
+ * emulation (app.emulateMobile), which shows what a phone shows.
  */
 export const isReadOnlyApp = (): boolean => !Platform.isDesktopApp || Platform.isMobile;
 
@@ -76,6 +66,8 @@ export const isReadOnlyApp = (): boolean => !Platform.isDesktopApp || Platform.i
 const DATA_SAVE_MS = 1500;
 /** Session backups kept per drawing. */
 const BACKUPS_PER_FILE = 5;
+/** SAFE-WRITE: the folder, in the plugin's own, where the new version of a drawing waits until it is written. */
+const SAVING = 'saving';
 
 /** What the plugin keeps in its data.json. */
 type PluginData = Partial<Settings> & { viewStates?: unknown };
@@ -87,11 +79,30 @@ export function hashPath(path: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+/** SAFE-WRITE: the name of a drawing's copy, from two hashes of its path, so no two drawings share one. */
+export function copyName(path: string): string {
+  return `${hashPath(path)}${hashPath(`${path.length}:${path}`)}.${EXTENSION}`;
+}
+
 /** NEW: `Drawing 2026-11-08 1402`, in local time. */
 export function newDrawingName(now: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   return `${NEW_DRAWING_NAME} ${date} ${pad(now.getHours())}${pad(now.getMinutes())}`;
+}
+
+/**
+ * NEW: the file or folder at `path` whatever the case of its names, found by walking down its folders from `root`, so
+ * the vault's other files are never listed.
+ */
+function findIgnoringCase(root: TFolder, path: string): TAbstractFile | null {
+  let found: TAbstractFile = root;
+  for (const name of path.toLowerCase().split('/')) {
+    const next = found instanceof TFolder ? found.children.find((child) => child.name.toLowerCase() === name) : null;
+    if (!next) return null;
+    found = next;
+  }
+  return found;
 }
 
 export default class ExcaliboardPlugin extends Plugin {
@@ -105,6 +116,8 @@ export default class ExcaliboardPlugin extends Plugin {
   private layoutClaimed = false;
   private editor: Promise<EditorModule> | null = null;
   private lastBackupTime = 0;
+  /** SAFE-WRITE: the drawings being written, whose copies recover() leaves alone. */
+  private writing = new Set<string>();
   private dataTimer: number | null = null;
 
   override async onload(): Promise<void> {
@@ -166,9 +179,17 @@ export default class ExcaliboardPlugin extends Plugin {
       this.app.vault.on('rename', (file, oldPath) => this.viewStates.rename(oldPath, file.path) && this.scheduleData()),
     );
     this.registerEvent(this.app.vault.on('delete', (file) => this.viewStates.delete(file.path) && this.scheduleData()));
+    // SAFE-WRITE: an edit waiting for its save is saved as soon as the window loses focus or is hidden, so no save is
+    // left for a quit, which gives a closing window 3 s; one still waiting is saved before Obsidian closes the window.
+    this.registerDomEvent(window, 'blur', () => void this.saveDrawings());
+    this.registerDomEvent(activeDocument, 'visibilitychange', () => {
+      if (activeDocument.hidden) void this.saveDrawings();
+    });
     this.registerEvent(
       this.app.workspace.on('quit', (tasks) => {
-        if (this.dataTimer !== null) tasks.add(() => this.flushData()); // otherwise quitting writes nothing
+        // Otherwise quitting writes nothing.
+        if (this.drawingsToSave().length) tasks.add(() => this.saveDrawings());
+        if (this.dataTimer !== null) tasks.add(() => this.flushData());
       }),
     );
   }
@@ -276,9 +297,7 @@ export default class ExcaliboardPlugin extends Plugin {
     if (path.split('/').some((name) => name.startsWith('.')))
       throw new Error(`the folder “${path}” in the settings is hidden (a name in it starts with a dot)`);
     // As written, else as macOS and Windows see it, where "Drawings" and "drawings" are the same folder.
-    const existing =
-      vault.getAbstractFileByPath(path) ??
-      vault.getAllLoadedFiles().find((file) => file.path.toLowerCase() === path.toLowerCase());
+    const existing = vault.getAbstractFileByPath(path) ?? findIgnoringCase(vault.getRoot(), path);
     if (existing instanceof TFolder) return existing;
     if (existing) throw new Error(`“${existing.path}” in the settings is a file, not a folder`);
     const created = await vault.createFolder(path);
@@ -308,62 +327,119 @@ export default class ExcaliboardPlugin extends Plugin {
     await this.saveData(data);
   }
 
-  private fullPath(path: string): string {
-    const adapter = this.app.vault.adapter;
-    // MOBILE: Platform first, as the mobile app may not define FileSystemAdapter at all.
-    if (!Platform.isDesktopApp || !(adapter instanceof FileSystemAdapter))
-      throw new Error(`${PLUGIN_NAME} needs Obsidian's desktop app`);
-    return adapter.getFullPath(normalizePath(path));
+  private pluginPath(...parts: string[]): string {
+    return normalizePath([this.manifest.dir ?? '', ...parts].join('/'));
+  }
+
+  /** SAFE-WRITE: the open drawings with an edit waiting for its save. */
+  private drawingsToSave(): ExcalidrawFileView[] {
+    return this.app.workspace
+      .getLeavesOfType(VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .filter((view): view is ExcalidrawFileView => view instanceof ExcalidrawFileView && view.hasUnsavedEdit());
+  }
+
+  /** SAFE-WRITE: saves each drawing with an edit waiting for its save. Never rejects, as a quit waits for it. */
+  async saveDrawings(): Promise<void> {
+    await Promise.all(
+      this.drawingsToSave().map((view) =>
+        view.save().catch((error: unknown) => console.error(`${PLUGIN_NAME}: could not save a drawing`, error)),
+      ),
+    );
   }
 
   /**
-   * SYNC-WRITE: one synchronous write. Obsidian's own write is async and chunked: in a hidden window it can take
-   * seconds, and Obsidian destroys a closing window 3 s into quitting, which once truncated a 3.9 MB drawing.
-   * `expected` is what Obsidian last read or wrote: if the file on disk differs from it (a sync or git change that
-   * Obsidian hasn't reported yet), that version is backed up before it is overwritten.
+   * SAFE-WRITE: writes a drawing with `write`, Obsidian's own write. It is async, and Node writes a file in pieces after
+   * emptying it, so a quit that destroys the window during the write (Obsidian gives a closing window 3 s) would leave
+   * the drawing cut off; that once happened to a 3.9 MB drawing. The whole new version goes to the plugin's folder
+   * first and is removed once the drawing is written: if the write is cut off, recover() puts it back. `expected` is
+   * what Obsidian last read or wrote: if the drawing on disk differs from it (a sync or git change that Obsidian hasn't
+   * reported yet), that version is backed up before it is overwritten.
    */
-  writeNow(path: string, text: string, expected?: string): void {
+  async writeDrawing(path: string, text: string, expected: string, write: () => Promise<void>): Promise<void> {
     if (this.readOnly) throw new Error(`${PLUGIN_NAME} doesn't write drawings on this device`); // MOBILE
-    const fs = nodeFs();
-    const full = this.fullPath(path);
-    if (expected !== undefined) {
-      let current: string | null = null;
-      try {
-        current = fs.readFileSync(full, 'utf8');
-      } catch {
-        // gone or unreadable: nothing on disk to keep
-      }
-      // Obsidian's read drops a leading byte order mark, so `expected` never has one.
-      const disk = current?.charCodeAt(0) === 0xfeff ? current.slice(1) : current;
-      if (current !== null && disk !== expected && disk !== text) {
-        this.backup(path, current);
-        new Notice(
-          `“${path.split('/').pop() ?? path}” changed on disk just before it was saved. Your version was saved; the ` +
-            'version from disk is in the session backups.',
-          15000,
-        );
-      }
+    const { adapter } = this.app.vault;
+    let disk: string | null = null;
+    try {
+      disk = await adapter.read(path);
+    } catch {
+      // gone or unreadable: nothing on disk to keep
     }
-    fs.writeFileSync(full, text);
+    // Obsidian's read drops a leading byte order mark, so `expected` never has one.
+    const current = disk?.charCodeAt(0) === 0xfeff ? disk.slice(1) : disk;
+    if (disk !== null && current !== expected && current !== text) {
+      await this.backup(path, disk);
+      new Notice(
+        `“${path.split('/').pop() ?? path}” changed on disk just before it was saved. Your version was saved; the ` +
+          'version from disk is in the session backups.',
+        15000,
+      );
+    }
+    const copy = this.pluginPath(SAVING, copyName(path));
+    this.writing.add(path);
+    try {
+      let copied = false;
+      try {
+        await adapter.mkdir(this.pluginPath(SAVING));
+        await adapter.write(copy, text);
+        copied = true;
+      } catch (error) {
+        // The edit is saved anyway; without its copy, only a quit during this very write could cut it off.
+        console.error(`${PLUGIN_NAME}: could not keep a copy of “${path}” while saving it`, error);
+      }
+      await write(); // if this throws, the copy stays: the write may have emptied the drawing before failing
+      if (copied) await adapter.remove(copy).catch(() => undefined);
+    } finally {
+      this.writing.delete(path);
+    }
+  }
+
+  /**
+   * SAFE-WRITE: for a drawing that can't be read, puts back the copy of the version being saved when its write was cut
+   * off, if there is one and it can be read; the cut-off version goes to the session backups. True when it did.
+   */
+  async recover(file: TFile): Promise<boolean> {
+    if (this.readOnly || this.writing.has(file.path)) return false;
+    const { adapter } = this.app.vault;
+    const copy = this.pluginPath(SAVING, copyName(file.path));
+    let text: string;
+    try {
+      if (!(await adapter.exists(copy))) return false;
+      text = await adapter.read(copy);
+    } catch {
+      return false;
+    }
+    if (!parseScene(text).ok) return false; // a copy cut off itself: that save never touched the drawing
+    try {
+      await this.backup(file.path, await adapter.read(file.path));
+      await this.app.vault.modify(file, text);
+    } catch (error) {
+      console.error(`${PLUGIN_NAME}: could not put back “${file.path}”`, error);
+      return false;
+    }
+    await adapter.remove(copy).catch(() => undefined);
+    new Notice(
+      `“${file.name}” was cut off when Obsidian closed during its last save. ${PLUGIN_NAME} put back the version it ` +
+        'was saving; the cut-off file is in the session backups.',
+      15000,
+    );
+    return true;
   }
 
   /**
    * BACKUP: copies text that is about to be overwritten to `<plugin folder>/backups/<hash of path>/<UTC time>.excalidraw`,
    * keeping the newest five per drawing. Names are unique and in order, even for two backups in one millisecond.
    */
-  backup(filePath: string, text: string): void {
+  async backup(filePath: string, text: string): Promise<void> {
     if (this.readOnly) return; // MOBILE: nothing is written, so nothing needs a backup
     try {
-      const fs = nodeFs();
-      const dir = this.fullPath(`${this.manifest.dir ?? ''}/backups/${hashPath(filePath)}`);
-      fs.mkdirSync(dir, { recursive: true });
+      const { adapter } = this.app.vault;
+      const dir = this.pluginPath('backups', hashPath(filePath));
+      await adapter.mkdir(dir);
       const time = (this.lastBackupTime = Math.max(Date.now(), this.lastBackupTime + 1));
-      fs.writeFileSync(`${dir}/${new Date(time).toISOString().replace(/[:.]/g, '-')}.${EXTENSION}`, text);
-      const files = fs
-        .readdirSync(dir)
-        .filter((f) => f.endsWith(`.${EXTENSION}`))
-        .sort();
-      for (const old of files.slice(0, -BACKUPS_PER_FILE)) fs.unlinkSync(`${dir}/${old}`);
+      await adapter.write(`${dir}/${new Date(time).toISOString().replace(/[:.]/g, '-')}.${EXTENSION}`, text);
+      const files = (await adapter.list(dir)).files.filter((f) => f.endsWith(`.${EXTENSION}`)).sort();
+      for (const old of files.slice(0, -BACKUPS_PER_FILE)) await adapter.remove(old);
     } catch (error) {
       console.error(`${PLUGIN_NAME}: session backup failed`, error);
       new Notice(`Could not back up “${filePath}” before saving it. The save went ahead.`, 15000);

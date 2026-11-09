@@ -69,8 +69,8 @@ and Excalidraw gets touch.
 
 - `src/`: the plugin. Each file starts with a comment that names its rules in capitals, which the code and the tests
   refer to.
-  - `main.ts`: the commands and menus, new drawings, the synchronous write and session backups, and where drawings
-    are read-only (phones and tablets).
+  - `main.ts`: the commands and menus, new drawings, the safe write through Obsidian's vault API and the session
+    backups, and where drawings are read-only (phones and tablets).
   - `view.ts`: the drawing view and its data safety rules.
   - `editor.tsx`: React and Excalidraw, which run only when the first drawing opens.
   - `scene.ts`: reading, writing and fingerprinting a drawing file.
@@ -81,10 +81,11 @@ and Excalidraw gets touch.
 - `esbuild.config.mjs`: the build. It bundles the editor into `main.js`, embeds Excalidraw's fonts so the editor
   never fetches one, and makes the places where Excalidraw would go online stay offline (`NETWORK_PATCHES`: pictures
   at web addresses, pasted web pages, AI pages, SVG exports, CSS built from drawing data, library previews and
-  uploads). It leaves out Excalidraw's translations, which never load here, and fails if a font would be fetched from
-  Excalidraw's CDN, if a patch doesn't match exactly once, or if `main.js` grows past 5 MB, the largest file Obsidian
-  Sync's Standard plan syncs. `main.js` ends with `LICENSE` and `THIRD-PARTY-NOTICES.md`, since Obsidian installs no
-  other file with it.
+  uploads). It leaves out Excalidraw's translations, which never load here, and its font subsetting (a stand-in puts
+  fonts into SVG exports whole), keeps Excalidraw's two localStorage entries in memory, and fails if a font would be
+  fetched from Excalidraw's CDN, if a patch doesn't match as often as it should, if `main.js` holds localStorage,
+  `eval` or `new Function`, or if it grows past 5 MB, the largest file Obsidian Sync's Standard plan syncs. `main.js`
+  ends with `LICENSE` and `THIRD-PARTY-NOTICES.md`, since Obsidian installs no other file with it.
 - `scripts/third-party-notices.mjs`: writes `THIRD-PARTY-NOTICES.md` from esbuild's metafile and the licence files
   in `node_modules`; what they don't hold (the fonts, for one) is written in the script, with its sources.
 - `stubs/mermaid-to-excalidraw/`: stands in for Excalidraw's Mermaid importer, which Excaliboard leaves out (see

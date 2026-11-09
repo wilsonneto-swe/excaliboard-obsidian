@@ -25,10 +25,13 @@ that Excalidraw doesn't: what it remembers for you, such as where you left each 
 - **Plain files.** A drawing is standard Excalidraw JSON, images included, with nothing added. Keys that another
   tool put at the top of the file are kept when Excaliboard saves it.
 - **Written only when you change it.** Opening a drawing, scrolling, zooming and selecting never write the file. A
-  change is saved 2 seconds later, when the tab closes and when you quit; Cmd/Ctrl+S saves at once.
-- **A drawing is never lost.** Before its first save in a session, the drawing is copied to a session backup. A
-  drawing that holds something this Excalidraw version can't read, such as the sticky notes excalidraw.com saves
-  today, opens read-only and stays exactly as it is, instead of losing those parts on the next save.
+  change is saved 2 seconds later, as soon as you switch to another app, when the tab closes and when you quit;
+  Cmd/Ctrl+S saves at once.
+- **A drawing is never lost.** Before its first save in a session, the drawing is copied to a session backup, and
+  each save keeps a copy of the new version until the drawing is written, so quitting during a save can't leave it
+  cut off. A drawing that holds something this Excalidraw version can't read, such as the sticky notes
+  excalidraw.com saves today, opens read-only and stays exactly as it is, instead of losing those parts on the next
+  save.
 - **Changes from elsewhere show up in place.** A change made by Obsidian Sync, iCloud, git or another tab appears in
   the open drawing. If you had unsaved edits too, yours are kept and saved, and the other version goes to the session
   backups.
@@ -125,8 +128,8 @@ and Excaliboard never writes one: there is no new drawing, image export or setti
 tab's header says why. Edit your drawings in Obsidian's desktop app; whatever syncs your vault brings the changes to
 the phone, and a drawing that is open there updates in place. Scroll and zoom are remembered on the phone too.
 
-Drawings are read-only there because Excaliboard saves a drawing with one synchronous write to the file
-([How it works](#how-it-works)), which only Obsidian's desktop app can make.
+Editing on phones and tablets, with touch and an app the system can close at any moment, is yet to be designed and
+tested; until then, Excaliboard leaves drawings there exactly as they are.
 
 ### What a drawing looks like as a file
 
@@ -152,19 +155,22 @@ diagram, a weekend trip plan, and a short tour of Excaliboard itself. Copy the f
 
 - **Opening.** Excaliboard reads the file and checks it before the editor sees it: it must be Excalidraw JSON, and
   every element must be one Excalidraw 0.18.1 can load. If not, the tab shows why, and the file is never written. The
-  editor itself, about 4.5 MB of code, is part of the plugin but runs only when the first drawing opens: at startup,
-  Obsidian only reads it. Excalidraw's translations of its interface are left out, as it runs in English here, which
-  keeps `main.js` under the 5 MB that Obsidian Sync's Standard plan syncs. A drawing opened for the first time is
-  fitted into the tab; after that, it opens where you left it (for the 200 drawings you opened most recently).
+  editor itself, about 2.5 MB of code, is part of the plugin but runs only when the first drawing opens: at startup,
+  Obsidian only reads it. Excalidraw's translations of its interface are left out, as it runs in English here, and
+  so is its font subsetting (see Offline), which keeps `main.js` at 2.8 MB, well under the 5 MB that Obsidian
+  Sync's Standard plan syncs. A drawing opened for the first time is fitted into the tab; after that, it opens where
+  you left it (for the 200 drawings you opened most recently).
 - **Saving.** Every change in the editor is compared with the drawing as it was read or last saved. Scrolling,
-  zooming and selecting change nothing that is saved, so they never cause a write. A real change is saved by
-  Obsidian 2 seconds later, when the tab closes, when another file opens in the tab and when you quit, in the
-  standard JSON from Excalidraw's own serializer.
-- **One write, at once.** A save is a single synchronous write of the whole file. Obsidian gives a closing window 3
-  seconds, and its own write is asynchronous and in chunks, which can leave a large drawing half written when you
-  quit right after an edit; Excaliboard's write finishes before Obsidian moves on. Obsidian's mobile app can't write
-  this way, so on phones and tablets Excaliboard writes no drawing and keeps no backup: Excalidraw is locked in its
-  view mode, and a change from elsewhere always replaces the drawing shown.
+  zooming and selecting change nothing that is saved, so they never cause a write. A real change is saved 2 seconds
+  later, as soon as Obsidian's window loses focus or is hidden, when the tab closes, when another file opens in the
+  tab and before Obsidian quits, in the standard JSON from Excalidraw's own serializer.
+- **Never cut off.** A save is Obsidian's own write, through its vault API. That write is asynchronous, and a large
+  file is written in pieces after it has been emptied, while Obsidian gives a closing window 3 seconds: a quit
+  during a write could leave a drawing cut off. So the new version is first copied to
+  `.obsidian/plugins/excaliboard/saving/`, and the copy is removed once the drawing is written. A drawing that can't
+  be read because its last write was cut off gets that copy back when it is opened, with a notice, and the cut-off
+  file goes to the session backups. On phones and tablets Excaliboard writes no drawing and keeps no backup:
+  Excalidraw is locked in its view mode, and a change from elsewhere always replaces the drawing shown.
 - **Session backups.** Before the first save after a drawing is opened, its previous version is copied to
   `.obsidian/plugins/excaliboard/backups/`, into a folder of its own whose name is a short code made from the
   drawing's path (eight letters and digits), as a file named after the time of the backup (UTC). The newest five are
@@ -180,7 +186,9 @@ diagram, a weekend trip plan, and a short tour of Excaliboard itself. Copy the f
   pictures; a web page made by Excalidraw's AI tools shows a note in its place; the library shows its items as images,
   which can't load anything; and the library's Publish, an upload, is hidden. Excalidraw gets only a drawing's
   elements, pictures and saved settings, never other settings or a library stored in the file. The
-  Mermaid-to-Excalidraw importer is left out, which keeps the plugin smaller and free of known advisories.
+  Mermaid-to-Excalidraw importer is left out, which keeps the plugin smaller and free of known advisories. So is
+  Excalidraw's font subsetting, WebAssembly run through code it generates: an SVG export holds each font it uses
+  whole, rather than only the letters used, as Excalidraw itself does when subsetting fails.
 - **One window.** Excalidraw works only in Obsidian's main window. A drawing moved to a separate window shows a note
   to move it back, after its pending edit is saved.
 
@@ -223,10 +231,11 @@ Excaliboard works offline. It makes no network requests and keeps the Excalidraw
 ([How it works](#how-it-works)); it has no telemetry or ads, and needs no account. Excalidraw's fonts are embedded
 instead of downloaded. It reads and writes the drawings you open or create, the notes a link on a shape creates, and
 the files you pick yourself in Excalidraw's dialogs (an exported image, a picture you insert, a library). It keeps
-two things in its own folder (`.obsidian/plugins/excaliboard/`): `data.json`, with the folder for new drawings and
-the scroll position and zoom of each drawing, and `backups/`, the session backups. Saves use Node's file system
-directly, which only Obsidian's desktop app has: on phones and tablets, Excaliboard writes no drawing and keeps no
-backup.
+three things in its own folder (`.obsidian/plugins/excaliboard/`): `data.json`, with the folder for new drawings and
+the scroll position and zoom of each drawing, `backups/`, the session backups, and `saving/`, which holds a
+drawing's new version only while it is being saved. Every file goes through Obsidian's vault API: Excaliboard doesn't
+use Node's file system, keeps nothing in the window's localStorage and runs no generated code. On phones and tablets
+it writes no drawing and keeps no backup.
 
 ## Building from source
 

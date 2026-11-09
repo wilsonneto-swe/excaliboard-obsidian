@@ -1,11 +1,9 @@
-// The plugin shell (src/main.ts) with the Obsidian stand-in: opening, new drawings, export, view state, the
-// synchronous write and session backups on a real temporary folder, and the read-only phone and tablet app.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+// The plugin shell (src/main.ts) with the Obsidian stand-in: opening, new drawings, export, view state, the safe
+// write and session backups through the vault adapter, and the read-only phone and tablet app.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import ExcaliboardPlugin, { hashPath, newDrawingName } from '../src/main';
+import ExcaliboardPlugin, { copyName, hashPath, newDrawingName } from '../src/main';
 import { EMPTY_SCENE } from '../src/scene';
+import { ExcalidrawFileView } from '../src/view';
 import {
   App,
   Menu,
@@ -301,50 +299,69 @@ it('on an Obsidian without the save step the data safety rules rely on, says so'
   );
 });
 
-describe('SYNC-WRITE and BACKUP, on disk', () => {
-  let base: string;
-  beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), 'excaliboard-test-'));
-    app.vault.adapter.basePath = base;
-  });
-  afterEach(() => rmSync(base, { recursive: true }));
+describe('SAFE-WRITE and BACKUP, through the vault adapter', () => {
+  const adapter = () => app.vault.adapter;
+  const COPY = `${DIR}/saving/${copyName('a.excalidraw')}`;
   const backups = (path: string) => {
-    const dir = join(base, DIR, 'backups', hashPath(path));
-    return readdirSync(dir)
+    const dir = `${DIR}/backups/${hashPath(path)}/`;
+    return [...adapter().files.keys()]
+      .filter((p) => p.startsWith(dir))
       .sort()
-      .map((f) => readFileSync(join(dir, f), 'utf8'));
+      .map((p) => adapter().files.get(p));
   };
+  /** Obsidian's own write of a drawing, as TextFileView's write step makes it. */
+  const obsidianWrite = (file: TFile, text: string) => () => app.vault.modify(file, text);
 
-  it('writes the text in one synchronous call', async () => {
+  it("writes a copy of the new version first, then the drawing with Obsidian's own write, then removes the copy", async () => {
     const plugin = await make();
-    plugin.writeNow('a.excalidraw', 'mine');
-    expect(readFileSync(join(base, 'a.excalidraw'), 'utf8')).toBe('mine');
+    const file = app.vault.add('a.excalidraw', 'what Obsidian read');
+    await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine'));
+    expect(await app.vault.read(file)).toBe('mine');
+    expect(adapter().log).toEqual([`write ${COPY}`, 'write a.excalidraw', `remove ${COPY}`]);
+  });
+
+  it('keeps the copy when the write fails, as the write may have emptied the drawing before failing', async () => {
+    const plugin = await make();
+    const file = app.vault.add('a.excalidraw', 'what Obsidian read');
+    adapter().failWrites = /^a\.excalidraw$/;
+    await expect(
+      plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine')),
+    ).rejects.toThrow('EACCES');
+    expect(adapter().files.get(COPY)).toBe('mine');
+  });
+
+  it('still saves the drawing when its copy cannot be written', async () => {
+    const plugin = await make();
+    const file = app.vault.add('a.excalidraw', 'what Obsidian read');
+    adapter().failWrites = /\/saving\b/;
+    await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine'));
+    expect(await app.vault.read(file)).toBe('mine');
   });
 
   it('backs up a version that changed on disk since Obsidian last read it, before writing over it', async () => {
     const plugin = await make();
-    writeFileSync(join(base, 'a.excalidraw'), 'theirs, synced a moment ago');
-    plugin.writeNow('a.excalidraw', 'mine', 'what Obsidian read');
-    expect(readFileSync(join(base, 'a.excalidraw'), 'utf8')).toBe('mine');
+    const file = app.vault.add('a.excalidraw', 'theirs, synced a moment ago');
+    await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine'));
+    expect(await app.vault.read(file)).toBe('mine');
     expect(backups('a.excalidraw')).toEqual(['theirs, synced a moment ago']);
     expect(Notice.messages.at(-1)).toMatch(/“a\.excalidraw” changed on disk just before it was saved/);
   });
 
   it('backs up nothing when the disk holds what Obsidian last read', async () => {
     const plugin = await make();
-    writeFileSync(join(base, 'a.excalidraw'), 'what Obsidian read');
-    plugin.writeNow('a.excalidraw', 'mine', 'what Obsidian read');
+    const file = app.vault.add('a.excalidraw', 'what Obsidian read');
+    await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine'));
     expect(Notice.messages).toEqual([]);
-    expect(() => backups('a.excalidraw')).toThrow(/ENOENT/);
+    expect(backups('a.excalidraw')).toEqual([]);
   });
 
   it('a byte order mark on disk, which Obsidian drops when it reads, is not a change', async () => {
     const plugin = await make();
-    writeFileSync(join(base, 'a.excalidraw'), '\uFEFFwhat Obsidian read');
-    plugin.writeNow('a.excalidraw', 'mine', 'what Obsidian read');
+    const file = app.vault.add('a.excalidraw', '﻿what Obsidian read');
+    await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine'));
     expect(Notice.messages).toEqual([]);
-    expect(() => backups('a.excalidraw')).toThrow(/ENOENT/);
-    expect(readFileSync(join(base, 'a.excalidraw'), 'utf8')).toBe('mine');
+    expect(backups('a.excalidraw')).toEqual([]);
+    expect(await app.vault.read(file)).toBe('mine');
   });
 
   it('keeps the newest 5 backups per drawing, in a folder named after its path', async () => {
@@ -352,10 +369,9 @@ describe('SYNC-WRITE and BACKUP, on disk', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     for (let i = 0; i < 7; i++) {
       vi.setSystemTime(new Date(2026, 10, 7, 12, 0, i));
-      plugin.backup('a.excalidraw', `v${i}`);
+      await plugin.backup('a.excalidraw', `v${i}`);
     }
-    plugin.backup('b.excalidraw', 'other');
-    expect(readdirSync(join(base, DIR, 'backups'))).toHaveLength(2);
+    await plugin.backup('b.excalidraw', 'other');
     expect(backups('a.excalidraw')).toEqual(['v2', 'v3', 'v4', 'v5', 'v6']);
     expect(backups('b.excalidraw')).toEqual(['other']);
   });
@@ -364,19 +380,88 @@ describe('SYNC-WRITE and BACKUP, on disk', () => {
     const plugin = await make();
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 10, 7, 12, 0, 0));
-    plugin.backup('a.excalidraw', 'disk version');
-    plugin.backup('a.excalidraw', 'opened version');
+    await plugin.backup('a.excalidraw', 'disk version');
+    await plugin.backup('a.excalidraw', 'opened version');
     expect(backups('a.excalidraw')).toEqual(['disk version', 'opened version']);
   });
 
   it('a failed backup is reported, and does not stop the save', async () => {
     const plugin = await make();
-    mkdirSync(join(base, DIR), { recursive: true });
-    writeFileSync(join(base, DIR, 'backups'), 'a file where the folder should be');
-    writeFileSync(join(base, 'a.excalidraw'), 'theirs, synced a moment ago');
-    plugin.writeNow('a.excalidraw', 'mine', 'what Obsidian read'); // backs up the disk version, then writes
+    const file = app.vault.add('a.excalidraw', 'theirs, synced a moment ago');
+    adapter().failWrites = /\/backups\//;
+    await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', obsidianWrite(file, 'mine'));
     expect(Notice.messages).toContain('Could not back up “a.excalidraw” before saving it. The save went ahead.');
-    expect(readFileSync(join(base, 'a.excalidraw'), 'utf8')).toBe('mine');
+    expect(await app.vault.read(file)).toBe('mine');
+  });
+
+  it("names a drawing's copy after two hashes of its path", () => {
+    expect(copyName('a.excalidraw')).toMatch(/^[0-9a-f]{16}\.excalidraw$/);
+    expect(copyName('a.excalidraw')).not.toBe(copyName('b.excalidraw'));
+  });
+
+  describe('a drawing cut off by quitting during its write', () => {
+    it('gets its copy back, and the cut-off file goes to the session backups', async () => {
+      const plugin = await make();
+      const cut = EMPTY_SCENE.slice(0, 40);
+      const file = app.vault.add('a.excalidraw', cut);
+      adapter().files.set(COPY, EMPTY_SCENE);
+      expect(await plugin.recover(file as never)).toBe(true);
+      expect(await app.vault.read(file)).toBe(EMPTY_SCENE);
+      expect(backups('a.excalidraw')).toEqual([cut]);
+      expect(adapter().files.has(COPY)).toBe(false);
+      expect(Notice.messages.at(-1)).toMatch(/^“a\.excalidraw” was cut off when Obsidian closed during its last save/);
+    });
+
+    it('is left as it is without a copy, with a copy that was cut off itself, or while it is being written', async () => {
+      const plugin = await make();
+      const file = app.vault.add('a.excalidraw', 'not a drawing');
+      expect(await plugin.recover(file as never)).toBe(false);
+      adapter().files.set(COPY, EMPTY_SCENE.slice(0, 30));
+      expect(await plugin.recover(file as never)).toBe(false);
+      adapter().files.set(COPY, EMPTY_SCENE);
+      let finish = () => {};
+      const writing = plugin.writeDrawing(
+        'a.excalidraw',
+        EMPTY_SCENE,
+        'not a drawing',
+        () => new Promise((resolve) => (finish = resolve)),
+      );
+      await vi.waitFor(() => expect(adapter().log).toContain(`write ${COPY}`));
+      expect(await plugin.recover(file as never)).toBe(false);
+      finish();
+      await writing;
+      expect(app.vault.writes).toEqual([]);
+    });
+  });
+
+  it('saves each drawing with an edit waiting when the window loses focus or is hidden, and before a quit', async () => {
+    const plugin = await make();
+    const saved: string[] = [];
+    const drawing = (name: string, unsaved: boolean, fails = false) => {
+      const leaf = app.workspace.getLeaf('tab');
+      leaf.view = Object.assign(Object.create(ExcalidrawFileView.prototype) as ExcalidrawFileView, {
+        hasUnsavedEdit: () => unsaved,
+        save: async () => {
+          if (fails) throw new Error('EACCES');
+          saved.push(name);
+        },
+      });
+    };
+    drawing('edited', true);
+    drawing('unchanged', false);
+    drawing('failing', true, true);
+    window.dispatchEvent(new Event('blur'));
+    await vi.waitFor(() => expect(saved).toEqual(['edited']));
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    hidden.mockRestore();
+    await vi.waitFor(() => expect(saved).toEqual(['edited', 'edited']));
+    const tasks: (() => Promise<void>)[] = [];
+    app.workspace.trigger('quit', { add: (task: () => Promise<void>) => tasks.push(task) });
+    expect(tasks).toHaveLength(1);
+    await tasks[0]!(); // a save that fails doesn't keep Obsidian from closing
+    expect(saved).toEqual(['edited', 'edited', 'edited']);
+    void plugin;
   });
 });
 
@@ -418,30 +503,30 @@ describe('MOBILE: read-only on phones and tablets', () => {
     expect(menu.items.map((i) => i.title)).toEqual(['Open in Excaliboard']);
   });
 
-  it("never reaches Node: no write, no backup, no require('fs')", async () => {
+  it('writes nothing: no drawing, no backup, no copy put back', async () => {
     Object.assign(Platform, MOBILE_APP);
+    const plugin = await make();
+    const file = app.vault.add('a.excalidraw', 'not a drawing');
+    app.vault.adapter.files.set(`${DIR}/saving/${copyName('a.excalidraw')}`, EMPTY_SCENE);
+    await expect(
+      plugin.writeDrawing('a.excalidraw', 'mine', 'theirs', () => app.vault.modify(file, 'mine')),
+    ).rejects.toThrow("Excaliboard doesn't write drawings on this device");
+    await plugin.backup('a.excalidraw', 'the version on disk');
+    expect(await plugin.recover(file as never)).toBe(false);
+    expect(app.vault.writes).toEqual([]);
+    expect(app.vault.adapter.log).toEqual([]);
+    expect(Notice.messages).toEqual([]);
+  });
+
+  it("never uses Node, in the desktop app either: every file goes through Obsidian's vault API", async () => {
     const nodeRequire = vi.spyOn(window as unknown as { require: (id: string) => unknown }, 'require');
     try {
       const plugin = await make();
-      expect(() => plugin.writeNow('a.excalidraw', 'mine', 'theirs')).toThrow(
-        "Excaliboard doesn't write drawings on this device",
-      );
-      plugin.backup('a.excalidraw', 'the version on disk');
-      expect(nodeRequire).not.toHaveBeenCalled();
-      expect(Notice.messages).toEqual([]);
-    } finally {
-      nodeRequire.mockRestore();
-    }
-  });
-
-  it("reaches Node's fs only in the desktop app, even if a write were attempted elsewhere", async () => {
-    const plugin = await make(); // made in the desktop app, so writes are allowed...
-    Object.assign(Platform, MOBILE_APP); // ...then asked to write where Node isn't
-    const nodeRequire = vi.spyOn(window as unknown as { require: (id: string) => unknown }, 'require');
-    try {
-      expect(() => plugin.writeNow('a.excalidraw', 'mine')).toThrow(
-        "Excaliboard writes files only in Obsidian's desktop app",
-      );
+      const file = app.vault.add('a.excalidraw', 'theirs');
+      await plugin.writeDrawing('a.excalidraw', 'mine', 'what Obsidian read', () => app.vault.modify(file, 'mine'));
+      await plugin.backup('a.excalidraw', 'mine');
+      await plugin.recover(file as never);
+      expect(await app.vault.read(file)).toBe('mine');
       expect(nodeRequire).not.toHaveBeenCalled();
     } finally {
       nodeRequire.mockRestore();

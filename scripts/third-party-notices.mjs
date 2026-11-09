@@ -19,6 +19,22 @@ import path from 'node:path';
 const root = path.resolve(import.meta.dirname, '..');
 const NOTICES = 'THIRD-PARTY-NOTICES.md';
 
+/**
+ * The modules of Excalidraw's that esbuild.config.mjs replaces (dropLocales, replaceSubsetting), kept in step with it:
+ * their code isn't in main.js, so neither are the licences of what it holds.
+ */
+const STAND_INS = {
+  name: 'stand-ins',
+  setup(build) {
+    build.onResolve({ filter: /^\.\/(locales\/[\w-]+|subset-(shared|worker)\.chunk)\.js$/ }, (args) =>
+      /[\\/]@excalidraw[\\/]excalidraw[\\/]dist[\\/]prod[\\/]/.test(args.importer)
+        ? { path: args.path, namespace: 'stand-in' }
+        : undefined,
+    );
+    build.onLoad({ filter: /.*/, namespace: 'stand-in' }, () => ({ contents: 'export {};', loader: 'js' }));
+  },
+};
+
 /** The options of esbuild.config.mjs that decide what main.js and styles.css bundle. Keep them in step with it. */
 const BUNDLING = {
   entryPoints: ['src/main.ts'],
@@ -32,6 +48,7 @@ const BUNDLING = {
   conditions: ['production'],
   loader: { '.woff2': 'dataurl' },
   minify: false,
+  plugins: [STAND_INS],
 };
 
 /**
@@ -74,7 +91,12 @@ async function main() {
     write: false,
     logLevel: 'error',
   });
-  const notices = render(bundledPackages(metafile), embeddedFonts(metafile));
+  const inputs = Object.values(metafile.outputs).flatMap((output) =>
+    Object.entries(output.inputs)
+      .filter(([, { bytesInOutput }]) => bytesInOutput > 0)
+      .map(([input]) => input),
+  );
+  const notices = render(bundledPackages(metafile), embeddedFonts(metafile), inputs);
   const file = path.join(root, NOTICES);
   if (!process.argv.includes('--check')) {
     writeFileSync(file, notices);
@@ -136,7 +158,7 @@ function embeddedFonts(metafile) {
 }
 
 /** The notices, once the hand-written data is checked against what is bundled. */
-function render(packages, fonts) {
+function render(packages, fonts, inputs) {
   const versionsOf = (name) => packages.filter((pkg) => pkg.name === name).map((pkg) => pkg.version);
   checked('FONTS', [FONTS_CHECKED_WITH], versionsOf);
   for (const family of fonts.keys())
@@ -210,7 +232,11 @@ function render(packages, fonts) {
     }
     for (const text of texts) entries.push({ ...pkg, label: `\`${id(pkg)}\``, text });
   }
-  const builds = INSIDE_BUILDS.filter((build) => checked('INSIDE_BUILDS', build.in, versionsOf, true));
+  const builds = INSIDE_BUILDS.filter(
+    (build) =>
+      checked('INSIDE_BUILDS', build.in, versionsOf, true) &&
+      (!build.bundles || inputs.some((input) => build.bundles.test(input))),
+  );
   for (const build of builds)
     for (const entry of build.entries) {
       const where = (entry.in ?? build.in).map((pin) => `\`${pin}\``).join(' and ');
@@ -700,6 +726,8 @@ const WITHOUT_LICENCE_FILE = [
 const INSIDE_BUILDS = [
   {
     in: ['@excalidraw/excalidraw@0.18.1'],
+    // Only while main.js holds Excalidraw's font subsetting, which esbuild.config.mjs replaces (replaceSubsetting).
+    bundles: /node_modules\/@excalidraw\/excalidraw\/dist\/prod\/chunk-EIO257PC\.js$/,
     about:
       '`@excalidraw/excalidraw` 0.18.1 includes the WebAssembly modules it subsets fonts with, and their bindings ' +
       `([scripts/buildWasm.js](${EXCALIDRAW_BLOB}/scripts/buildWasm.js), ` +
@@ -707,13 +735,7 @@ const INSIDE_BUILDS = [
       "those of the harfbuzzjs 0.3.6 and fonteditor-core 2.4.0 npm packages: HarfBuzz's subsetter, with bindings " +
       "adapted from subset-font, and Google's WOFF2 and Brotli, with fonteditor-core's bindings, which it adapted " +
       "from woff2-wasm. fonteditor-core doesn't record which WOFF2 and Brotli commits it built, in 2019 and 2020; " +
-      'both were MIT-licensed by then, and their licences are linked at recent commits. Its icons come from Font ' +
-      'Awesome, Tabler Icons and, for one, Storybook ' +
-      `([components/icons.tsx](${EXCALIDRAW_BLOB}/packages/excalidraw/components/icons.tsx)). Excalidraw doesn't ` +
-      "record their versions, so the licences are linked on Font Awesome's 5.x branch, at a recent commit of Tabler " +
-      "Icons, and as Storybook's was when Excalidraw added that icon, in February 2020. Comments in its source also " +
-      'credit a few short functions to lodash, clipboard.js, klona, Modernizr, p-try, Radix UI and the TC39 proposal ' +
-      'for `Array.prototype.at`, all MIT-licensed; those are not listed below.',
+      'both were MIT-licensed by then, and their licences are linked at recent commits.',
     entries: [
       {
         name: 'harfbuzzjs',
@@ -766,6 +788,18 @@ const INSIDE_BUILDS = [
         license: 'MIT',
         mit: ['Copyright (c) 2019 Ali Milhim'],
       },
+    ],
+  },
+  {
+    in: ['@excalidraw/excalidraw@0.18.1'],
+    about:
+      "`@excalidraw/excalidraw` 0.18.1's icons come from Font Awesome, Tabler Icons and, for one, Storybook " +
+      `([components/icons.tsx](${EXCALIDRAW_BLOB}/packages/excalidraw/components/icons.tsx)). Excalidraw doesn't ` +
+      "record their versions, so the licences are linked on Font Awesome's 5.x branch, at a recent commit of Tabler " +
+      "Icons, and as Storybook's was when Excalidraw added that icon, in February 2020. Comments in its source also " +
+      'credit a few short functions to lodash, clipboard.js, klona, Modernizr, p-try, Radix UI and the TC39 proposal ' +
+      'for `Array.prototype.at`, all MIT-licensed; those are not listed below.',
+    entries: [
       {
         name: 'Font Awesome Free',
         label: 'Font Awesome Free',

@@ -14,9 +14,9 @@
  *  - FLUSH: closing the tab, opening another file in it and quitting save the live scene, then the editor goes.
  *  - OUTSIDE-CHANGE: a version that changed on disk (sync, git, another pane) replaces an unedited drawing in place;
  *    with unsaved edits, those are kept and saved, and the disk version is backed up first.
- *  - SYNC-WRITE: a save is one synchronous write (main.ts writeNow), which also backs up a disk version that
- *    changed behind Obsidian's back since the last read: Obsidian destroys a closing window 3 s into quitting, and
- *    its own write is async and chunked, which once truncated a 3.9 MB drawing.
+ *  - SAFE-WRITE: a save is Obsidian's own write, with a copy of the new version kept until it is done (main.ts
+ *    writeDrawing), which also backs up a disk version that changed behind Obsidian's back since the last read. A
+ *    drawing that can't be read, because quitting cut its last write off, gets that copy back (main.ts recover).
  *  - VIEW-STATE: scroll and zoom are kept per drawing in the plugin's data (view-state.ts), never in the file.
  *  - FOCUS: the canvas takes the keyboard when its tab becomes the active one, so tool keys work without a click first;
  *    never while another tab is active, and never away from something in this tab the click itself focused.
@@ -66,7 +66,7 @@ function withoutFailedMarks(before: Scene['elements'] | null, after: Scene['elem
   });
   return marked ? unmarked : null;
 }
-/** Obsidian's own write step (vault.modify), kept as the fallback of writeData. Not part of the typed API. */
+/** Obsidian's own write step (vault.modify, with its error handling). Not part of the typed API. */
 const obsidianWriteData = (TextFileView.prototype as unknown as { writeData?: (...args: unknown[]) => Promise<void> })
   .writeData;
 /**
@@ -87,8 +87,8 @@ const EXCALIDRAW_KEYS: [Modifier[], string][] = [
 const READ_ONLY_ICON = 'pencil-off';
 const READ_ONLY_TITLE = 'Read-only on this device';
 const READ_ONLY_NOTE =
-  'Drawings are read-only on phones and tablets: Excaliboard saves a drawing with a direct write to the file, which ' +
-  "only Obsidian's desktop app can make. Edit it on your computer; the changes show up here once they sync.";
+  "Excaliboard edits drawings in Obsidian's desktop app, and shows them read-only on phones and tablets. Edit this " +
+  'drawing on your computer; the changes show up here once they sync.';
 /** A link with a scheme (https:, mailto:, obsidian:, ...) opens outside the vault; a dangerous one never opens. */
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const BLOCKED_SCHEME = /^(about|javascript|data|vbscript|file):/i;
@@ -228,7 +228,7 @@ export class ExcalidrawFileView extends TextFileView {
   override async save(clear?: boolean): Promise<void> {
     if (!this.backedUp && this.file && this.isDirty()) {
       this.backedUp = true; // BACKUP: the first write since the file was opened
-      this.plugin.backup(this.file.path, this.text);
+      await this.plugin.backup(this.file.path, this.text);
     }
     this.pending = null;
     await super.save(clear); // calls getViewData() and writes the result if it differs from the file
@@ -236,16 +236,18 @@ export class ExcalidrawFileView extends TextFileView {
     if (written && this.data === written.text) [this.text, this.savedFp] = [written.text, written.fp];
   }
 
-  // SYNC-WRITE: replaces TextFileView's internal write step. If the synchronous write fails, Obsidian's own write
-  // runs instead, with its error handling.
+  // SAFE-WRITE: TextFileView's internal write step, Obsidian's own, with a copy of the new version until it is done.
   async writeData(file: TFile, data: string, previous: string): Promise<void> {
     if (this.readOnly) throw new Error(`${file.name} is read-only on this device`); // READ-ONLY, never reached
-    try {
-      this.plugin.writeNow(file.path, data, previous);
-    } catch (error) {
-      if (!obsidianWriteData) throw error;
-      return obsidianWriteData.call(this, file, data, previous);
-    }
+    await this.plugin.writeDrawing(file.path, data, previous, async () => {
+      if (obsidianWriteData) await obsidianWriteData.call(this, file, data, previous);
+      else await this.app.vault.modify(file, data);
+    });
+  }
+
+  /** SAFE-WRITE: whether an edit is waiting for its save. */
+  hasUnsavedEdit(): boolean {
+    return this.isDirty();
   }
 
   getViewData(): string {
@@ -269,6 +271,7 @@ export class ExcalidrawFileView extends TextFileView {
     this.text = data;
     const parsed = parseScene(data);
     const problem = parsed.ok ? this.lib?.checkScene(parsed.scene) : parsed.error; // lib may still be loading
+    if (!parsed.ok && this.file) void this.plugin.recover(this.file); // SAFE-WRITE: a write cut off by quitting
     if (!parsed.ok || problem) return this.showError(problem ?? 'It cannot be read.');
     this.loadFailed = false;
     this.original = parsed.scene;
@@ -321,7 +324,7 @@ export class ExcalidrawFileView extends TextFileView {
 
   /** OUTSIDE-CHANGE with unsaved edits: keep them and save them, after backing up the disk version. */
   private async keepLocalEdits(diskText: string): Promise<void> {
-    if (this.file) this.plugin.backup(this.file.path, diskText);
+    if (this.file) await this.plugin.backup(this.file.path, diskText);
     new Notice(
       `“${this.getDisplayText()}” changed on disk while it had unsaved edits. Your edits were kept and saved over it; ` +
         'the version from disk is in the session backups.',

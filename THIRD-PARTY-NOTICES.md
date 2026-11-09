@@ -259,14 +259,7 @@ These were published without a licence file, so their licence comes from their r
 Some packages' builds include other projects' code, which `node_modules` doesn't hold apart. Those projects are listed
 too, with the package they are in:
 
-- `@excalidraw/excalidraw` 0.18.1 includes the WebAssembly modules it subsets fonts with, and their bindings
-  ([scripts/buildWasm.js](https://github.com/excalidraw/excalidraw/blob/v0.18.1/scripts/buildWasm.js),
-  [packages/excalidraw/subset](https://github.com/excalidraw/excalidraw/tree/v0.18.1/packages/excalidraw/subset)). The
-  modules are byte for byte those of the harfbuzzjs 0.3.6 and fonteditor-core 2.4.0 npm packages: HarfBuzz's
-  subsetter, with bindings adapted from subset-font, and Google's WOFF2 and Brotli, with fonteditor-core's bindings,
-  which it adapted from woff2-wasm. fonteditor-core doesn't record which WOFF2 and Brotli commits it built, in 2019
-  and 2020; both were MIT-licensed by then, and their licences are linked at recent commits. Its icons come from Font
-  Awesome, Tabler Icons and, for one, Storybook
+- `@excalidraw/excalidraw` 0.18.1's icons come from Font Awesome, Tabler Icons and, for one, Storybook
   ([components/icons.tsx](https://github.com/excalidraw/excalidraw/blob/v0.18.1/packages/excalidraw/components/icons.tsx)).
   Excalidraw doesn't record their versions, so the licences are linked on Font Awesome's 5.x branch, at a recent
   commit of Tabler Icons, and as Storybook's was when Excalidraw added that icon, in February 2020. Comments in its
@@ -303,13 +296,9 @@ the list of everything that uses them.
   `@radix-ui/react-use-size@1.1.0`: Copyright (c) 2022 WorkOS
 - `aria-hidden@1.2.6`, `react-remove-scroll@2.7.2`, `react-style-singleton@2.2.3`, `use-callback-ref@1.3.3`,
   `use-sidecar@1.1.3`: Copyright (c) 2017 Anton Korzunov
-- [Brotli](https://github.com/google/brotli/blob/d89c4b1c52e25ddafe047bc78bbee5c1e24b1809/LICENSE) (in
-  `@excalidraw/excalidraw@0.18.1`): Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
 - `canvas-roundrect-polyfill@0.0.1`: Copyright (c) 2021 Tristan Fraipont
 - `clsx@1.1.1`: Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
 - `es6-promise-pool@2.5.0`: Copyright (c) 2017 Tim De Pauw <https://tmdpw.eu/>
-- [fonteditor-core 2.4.0](https://github.com/kekee000/fonteditor-core/blob/v2.4.0/LICENSE) (in
-  `@excalidraw/excalidraw@0.18.1`): Copyright (c) 2014 ecomfe
 - `fuzzy@0.1.3`: Copyright (c) 2012 Matt York
 - `get-nonce@1.0.1`: Copyright (c) 2020 Anton Korzunov
 - [glur 1.1.2](https://www.npmjs.com/package/glur/v/1.1.2) (in `pica@7.1.1` and `image-blob-reduce@3.0.1`): Copyright
@@ -338,10 +327,6 @@ the list of everything that uses them.
   `@excalidraw/excalidraw@0.18.1`): Copyright (c) 2020-2026 Paweł Kuna
 - `tunnel-rat@0.1.2`: Copyright (c) 2022 Poimandres
 - `use-sync-external-store@1.7.0`: Copyright (c) Meta Platforms, Inc. and affiliates.
-- [WOFF2](https://github.com/google/woff2/blob/7b67e12355fe7da148db5c19d4261f0a498a9537/LICENSE) (in
-  `@excalidraw/excalidraw@0.18.1`): Copyright (c) 2013-2017 by the WOFF2 Authors.
-- [woff2-wasm](https://github.com/alimilhim/woff2-wasm/blob/78c679a73d6cb40056896842121297948aaec8b8/LICENSE) (in
-  `@excalidraw/excalidraw@0.18.1`): Copyright (c) 2019 Ali Milhim
 - `zustand@4.5.7`: Copyright (c) 2019 Paul Henschel
 
 ```
@@ -590,41 +575,6 @@ SOFTWARE.
    limitations under the License.
 ```
 
-### BSD 3-Clause License: subset-font
-
-- [subset-font at 3f711c8](https://github.com/papandreou/subset-font/blob/3f711c8aa29a426c7f22655861abfb976950f527/LICENSE)
-  (in `@excalidraw/excalidraw@0.18.1`):
-  - Copyright (c) 2012, Andreas Lind Petersen
-  - All rights reserved.
-
-```
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-  * Redistributions of source code must retain the above copyright
-    notice, this list of conditions and the following disclaimer.
-  * Redistributions in binary form must reproduce the above copyright
-    notice, this list of conditions and the following disclaimer in
-    the documentation and/or other materials provided with the
-    distribution.
-  * Neither the name of the author nor the names of contributors may
-    be used to endorse or promote products derived from this
-    software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
-IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
-TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
-PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
 ### BSD Zero Clause License: tslib
 
 - `tslib@2.9.1`: Copyright (c) Microsoft Corporation.
@@ -833,34 +783,6 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### MIT License: harfbuzzjs
-
-- [harfbuzzjs 0.3.6](https://github.com/harfbuzz/harfbuzzjs/blob/v0.3.6/LICENSE) (in `@excalidraw/excalidraw@0.18.1`):
-  Copyright (c) 2019 Ebrahim Byagowi
-
-```
-Apache license for Zephyr libc implementations (zephyr-string.c),
-emmalloc.cpp (from emscripten project) and MIT for rest of the project
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ### MIT License: lodash.debounce, lodash.throttle
 
 - `lodash.debounce@4.0.8`, `lodash.throttle@4.1.1`: Copyright jQuery Foundation and other contributors
@@ -987,54 +909,6 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
-
-### Old MIT License: HarfBuzz
-
-- [HarfBuzz at e079dd2, the commit harfbuzzjs 0.3.6 builds](https://github.com/harfbuzz/harfbuzz/blob/e079dd20304bacd8d753eee2ceacbaa1a3978a34/COPYING)
-  (in `@excalidraw/excalidraw@0.18.1`):
-  - Copyright © 2010-2022  Google, Inc.
-  - Copyright © 2015-2020  Ebrahim Byagowi
-  - Copyright © 2019,2020  Facebook, Inc.
-  - Copyright © 2012,2015  Mozilla Foundation
-  - Copyright © 2011  Codethink Limited
-  - Copyright © 2008,2010  Nokia Corporation and/or its subsidiary(-ies)
-  - Copyright © 2009  Keith Stribley
-  - Copyright © 2011  Martin Hosken and SIL International
-  - Copyright © 2007  Chris Wilson
-  - Copyright © 2005,2006,2020,2021,2022,2023  Behdad Esfahbod
-  - Copyright © 2004,2007,2008,2009,2010,2013,2021,2022,2023  Red Hat, Inc.
-  - Copyright © 1998-2005  David Turner and Werner Lemberg
-  - Copyright © 2016  Igalia S.L.
-  - Copyright © 2022  Matthias Clasen
-  - Copyright © 2018,2021  Khaled Hosny
-  - Copyright © 2018,2019,2020  Adobe, Inc
-  - Copyright © 2013-2015  Alexei Podtelezhnikov
-
-```
-HarfBuzz is licensed under the so-called "Old MIT" license.  Details follow.
-For parts of HarfBuzz that are licensed under different licenses see individual
-files names COPYING in subdirectories where applicable.
-
-For full copyright notices consult the individual files in the package.
-
-Permission is hereby granted, without written agreement and without
-license or royalty fees, to use, copy, modify, and distribute this
-software and its documentation for any purpose, provided that the
-above copyright notice and the following two paragraphs appear in
-all copies of this software.
-
-IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE TO ANY PARTY FOR
-DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES
-ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN
-IF THE COPYRIGHT HOLDER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGE.
-
-THE COPYRIGHT HOLDER SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING,
-BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
-ON AN "AS IS" BASIS, AND THE COPYRIGHT HOLDER HAS NO OBLIGATION TO
-PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 ```
 
 ### zlib License: zlib
