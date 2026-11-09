@@ -45,8 +45,7 @@ that Excalidraw doesn't: what it remembers for you, such as where you left each 
 ## How it compares
 
 Several Obsidian plugins open and edit Excalidraw drawings. The table sets out what each one says about itself on its
-page in the [community directory](https://community.obsidian.md/plugins) (read on November 7, 2026); "—" means the
-page doesn't say.
+page in the [community directory](https://community.obsidian.md/plugins).
 
 | | Drawings are saved as | Editor | Previews in notes | Desktop and mobile | Network use |
 | --- | --- | --- | --- | --- | --- |
