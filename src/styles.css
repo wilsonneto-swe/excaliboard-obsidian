@@ -1,0 +1,80 @@
+/* Excaliboard: the editor fills the tab, its interface takes Obsidian's accent colour, and the read-only panel is
+   readable text. These rules are scoped to the drawing view, except the ones for Excalidraw's dialogs, which Excalidraw
+   attaches to the document's body. (Excalidraw's own stylesheet, which the build adds after these rules, styles every
+   .excalidraw element, as in any plugin that bundles Excalidraw.) */
+.workspace-leaf-content[data-type='excaliboard'] > .excaliboard-view {
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+}
+.excaliboard-editor {
+  position: absolute;
+  inset: 0;
+}
+.excaliboard-error {
+  padding: var(--size-4-8, 32px);
+  max-width: 40em;
+  margin: 0 auto;
+  user-select: text;
+}
+.excaliboard-error h3 {
+  color: var(--text-error);
+}
+
+/* Obsidian's accent colour for Excalidraw's own interface: the selected tool and other active buttons, the primary
+   buttons, focus rings. The drawing's colours are in the file and never change. Excalidraw's dialogs are attached to
+   the document's body, outside the drawing view, so they keep Excalidraw's colours. */
+.excaliboard-view .excalidraw,
+.excaliboard-view .excalidraw.theme--dark {
+  --color-primary: var(--interactive-accent);
+  --color-primary-darker: var(--interactive-accent-hover);
+  --color-primary-darkest: var(--interactive-accent-hover);
+  --color-primary-hover: var(--interactive-accent-hover);
+  --color-primary-light: hsla(var(--interactive-accent-hsl), 0.2);
+  --color-primary-light-darker: hsla(var(--interactive-accent-hsl), 0.3);
+  --color-surface-primary-container: hsla(var(--interactive-accent-hsl), 0.2);
+  --color-on-primary-container: var(--text-accent);
+}
+.excaliboard-view .excalidraw.theme--dark {
+  --color-surface-primary-container: hsla(var(--interactive-accent-hsl), 0.3);
+}
+
+/* "Web Embed" and "Mermaid to Excalidraw" in "More tools" do nothing here (remote embeds are refused, Mermaid isn't
+   bundled); in Excalidraw 0.18.1 both items carry this test id. The "Generate" heading above Mermaid goes too. The
+   items' selector has one class more than Excalidraw's own rule for them, which comes later in styles.css. */
+.excaliboard-view .App-toolbar__extra-tools-dropdown .dropdown-menu-item[data-testid='toolbar-embeddable'],
+.excaliboard-view .App-toolbar__extra-tools-dropdown div[style*='font-weight: 600'] {
+  display: none;
+}
+
+/* NO-NETWORK: "Publish" in the library's menu would upload the selected items to Excalidraw's library service (the
+   build also makes that upload fail). In 0.18.1 that item carries this test id: an Excalidraw slip, as the item that
+   resets the library or removes the selected items has none. */
+.excaliboard-view .excalidraw .dropdown-menu-item[data-testid='lib-dropdown--remove'] {
+  display: none;
+}
+
+/* NO-NETWORK: the build shows each library item's preview as an image (esbuild.config.mjs), sized here as Excalidraw
+   sizes the inline SVG it replaces. */
+.excalidraw .library-unit__dragger > img {
+  filter: var(--theme-filter);
+  flex-grow: 1;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* Obsidian draws every checked radio button and checkbox (an accent fill and a mark). Excalidraw's radio groups and
+   switches, such as Scale and Background in the image export dialog, draw their own state under a transparent input.
+   The dialogs are outside the drawing view, so these rules apply to any Excalidraw in the window. */
+.excalidraw .RadioGroup__choice input:checked,
+.excalidraw .Switch input:checked {
+  background-color: transparent;
+}
+.excalidraw .RadioGroup__choice input:checked::after,
+.excalidraw .Switch input:checked::after {
+  content: none;
+}

@@ -1,0 +1,20 @@
+{
+  "title": "A page request",
+  "subtitle": "What happens between the browser and the database",
+  "layout": "right",
+  "nodes": [
+    {"id": "browser", "label": "Browser", "shape": "ellipse"},
+    {"id": "cdn", "label": "CDN\nstatic files", "color": "gray"},
+    {"id": "app", "label": "App server", "color": "blue", "link": "https://example.com/runbook"},
+    {"id": "cache", "label": "Cache\n60 s TTL", "color": "yellow"},
+    {"id": "db", "label": "Database", "color": "green"}
+  ],
+  "edges": [
+    {"from": "browser", "to": "cdn", "label": "GET /"},
+    {"from": "cdn", "to": "browser", "label": "HTML"},
+    {"from": "cdn", "to": "app", "label": "cache miss"},
+    {"from": "app", "to": "cache", "style": "dashed"},
+    {"from": "app", "to": "db", "label": "SQL"}
+  ],
+  "notes": ["The app server's box links to its runbook (example.com)."]
+}

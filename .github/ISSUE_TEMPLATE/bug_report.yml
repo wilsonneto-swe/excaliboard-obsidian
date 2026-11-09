@@ -1,0 +1,93 @@
+name: Bug report
+description: Something in Excaliboard doesn't work as described in the README.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. For questions and help, use [Discussions](https://github.com/wilsonneto-swe/excaliboard-obsidian/discussions) instead.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Excaliboard version
+      description: Settings > Community plugins shows it.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: obsidian-version
+    attributes:
+      label: Obsidian version
+      description: Settings > General shows it.
+      placeholder: "1.15.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Choose every platform where it happens. Excaliboard runs on the desktop app.
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: sync
+    attributes:
+      label: How the vault syncs
+      multiple: true
+      options:
+        - Not synced
+        - Obsidian Sync
+        - iCloud
+        - Git
+        - Another service (Dropbox, Syncthing, OneDrive...)
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From opening the drawing to the problem, with the keys you pressed or what you clicked.
+      placeholder: |
+        1. Open "Example.excalidraw" from the file explorer.
+        2. Draw a rectangle and type a label in it.
+        3. Close the tab and open the drawing again.
+        4. ...
+    validations:
+      required: true
+  - type: textarea
+    id: sample-drawing
+    attributes:
+      label: A drawing that shows the problem
+      description: |
+        As small as you can make it. Attach the `.excalidraw` file (zip it if GitHub refuses the extension). A drawing can hold images and text you wrote: remove anything personal first. If Excaliboard changed a drawing in a way it shouldn't have, attach it before and after; the session backups in `.obsidian/plugins/excaliboard/backups/` hold earlier versions.
+    validations:
+      required: false
+  - type: textarea
+    id: console
+    attributes:
+      label: Errors from the developer console
+      description: "View > Toggle Developer Tools (Ctrl+Shift+I, or Cmd+Option+I on a Mac), then the Console tab. Paste any error that mentions Excaliboard or Excalidraw."
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I searched the existing issues for this problem.
+          required: true
+        - label: The sample drawing and the steps contain no personal data.
+          required: true

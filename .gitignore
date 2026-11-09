@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# the build: main.js and styles.css at the root (what Obsidian loads), main.css when a build check fails before it
+# becomes styles.css; dist/ from older builds
+/main.js
+/styles.css
+/main.css
+/dist/
+/build/
+
+# local files: drawings at the root (the examples are in examples/), tool settings
+/*.excalidraw
+/.claude/
+
+# a test vault's plugin data, backups, logs and OS noise
+data.json
+backups/
+*.log
+.DS_Store

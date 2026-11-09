@@ -1,0 +1,24 @@
+{
+  "title": "Sign-in",
+  "subtitle": "Password check with a lockout after five failures",
+  "layout": "down",
+  "nodes": [
+    {"id": "start", "label": "Sign-in page", "shape": "ellipse"},
+    {"id": "enter", "label": "Enter email\nand password", "color": "blue"},
+    {"id": "locked", "label": "Account\nlocked?", "shape": "diamond", "color": "yellow"},
+    {"id": "check", "label": "Password\ncorrect?", "shape": "diamond", "color": "yellow"},
+    {"id": "count", "label": "Count the failure\nshow an error", "color": "red"},
+    {"id": "wait", "label": "Wait 15 minutes\nor reset by email", "color": "gray"},
+    {"id": "home", "label": "Signed in", "shape": "ellipse", "color": "green"}
+  ],
+  "edges": [
+    {"from": "start", "to": "enter"},
+    {"from": "enter", "to": "locked"},
+    {"from": "locked", "to": "check", "label": "no"},
+    {"from": "locked", "to": "wait", "label": "yes"},
+    {"from": "check", "to": "home", "label": "yes"},
+    {"from": "check", "to": "count", "label": "no"},
+    {"from": "count", "to": "enter", "label": "try again", "style": "dashed"}
+  ],
+  "notes": ["After 5 failures in a row the account locks for 15 minutes."]
+}

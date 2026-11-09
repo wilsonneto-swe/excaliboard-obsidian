@@ -1,0 +1,27 @@
+{
+  "title": "Deploy pipeline",
+  "layout": "right",
+  "nodes": [
+    {"id": "push", "label": "Push to main", "shape": "ellipse"},
+    {"id": "lint", "label": "Lint and\ntype check", "color": "blue", "group": "build"},
+    {"id": "compile", "label": "Build\nartifacts", "color": "blue", "group": "build"},
+    {"id": "unit", "label": "Unit tests", "color": "green", "group": "test"},
+    {"id": "e2e", "label": "End-to-end\ntests", "color": "green", "group": "test"},
+    {"id": "staging", "label": "Staging", "color": "violet", "group": "deploy"},
+    {"id": "prod", "label": "Production", "color": "violet", "group": "deploy"}
+  ],
+  "edges": [
+    {"from": "push", "to": "lint"},
+    {"from": "lint", "to": "compile"},
+    {"from": "compile", "to": "unit"},
+    {"from": "compile", "to": "e2e"},
+    {"from": "unit", "to": "staging"},
+    {"from": "e2e", "to": "staging"},
+    {"from": "staging", "to": "prod", "label": "approved", "style": "dashed"}
+  ],
+  "groups": [
+    {"id": "build", "label": "Build", "color": "blue"},
+    {"id": "test", "label": "Test", "color": "green"},
+    {"id": "deploy", "label": "Deploy", "color": "violet"}
+  ]
+}

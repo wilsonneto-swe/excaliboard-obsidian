@@ -1,0 +1,8 @@
+{
+  "name": "@excalidraw/mermaid-to-excalidraw",
+  "version": "0.0.0-excaliboard-stub",
+  "private": true,
+  "description": "Stand-in that leaves Mermaid out of Excaliboard (see the overrides in the root package.json).",
+  "type": "module",
+  "exports": "./index.js"
+}
