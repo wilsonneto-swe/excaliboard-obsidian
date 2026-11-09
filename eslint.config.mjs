@@ -25,4 +25,10 @@ export default defineConfig([
       },
     },
   },
+  {
+    // The scripts run in Node, never in Obsidian. The recommended config gives Node's globals only to the code of a
+    // desktop-only plugin, and Excaliboard also runs on phones.
+    files: ['scripts/*.mjs', 'skills/*/scripts/*.mjs'],
+    languageOptions: { globals: { process: 'readonly', Buffer: 'readonly' } },
+  },
 ]);

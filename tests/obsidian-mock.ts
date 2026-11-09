@@ -70,6 +70,31 @@ export const Keymap = {
   },
 };
 
+const DESKTOP_APP = {
+  isDesktopApp: true,
+  isDesktop: true,
+  isMobileApp: false,
+  isMobile: false,
+  isPhone: false,
+  isTablet: false,
+};
+/** Obsidian's mobile app on a phone: no Node, the mobile layout. */
+export const MOBILE_APP = {
+  ...DESKTOP_APP,
+  isDesktopApp: false,
+  isDesktop: false,
+  isMobileApp: true,
+  isMobile: true,
+  isPhone: true,
+};
+/** The desktop app with app.emulateMobile(true): Node, but the mobile layout. */
+export const MOBILE_EMULATION = { ...DESKTOP_APP, isDesktop: false, isMobile: true, isPhone: true };
+/** Obsidian's platform flags, as in the desktop app until a test changes them; tests/setup.ts puts them back. */
+export const Platform = { ...DESKTOP_APP };
+export function resetPlatform(): void {
+  Object.assign(Platform, DESKTOP_APP);
+}
+
 export class Scope {
   keys: { modifiers: string[] | null; key: string | null; func: () => unknown }[] = [];
   constructor(public parent?: Scope) {}
@@ -345,7 +370,10 @@ export class Plugin {
   addCommand(command: Plugin['commands'][number]) {
     this.commands.push(command);
   }
-  addSettingTab(_tab: unknown) {}
+  settingTabs: unknown[] = [];
+  addSettingTab(tab: unknown) {
+    this.settingTabs.push(tab);
+  }
   registerEvent(ref: unknown) {
     this.refs.push(ref);
   }
@@ -421,6 +449,12 @@ export abstract class TextFileView {
     this.unsubscribe.push(() => void cleanup());
   }
   onPaneMenu(_menu: Menu, _source: string) {}
+  /** The buttons in the tab's header (ItemView.addAction). */
+  actions: { icon: string; title: string; callback: (evt: MouseEvent) => unknown }[] = [];
+  addAction(icon: string, title: string, callback: (evt: MouseEvent) => unknown) {
+    this.actions.push({ icon, title, callback });
+    return this.containerEl.createDiv('view-action');
+  }
   async onRename(_file: TFile) {}
   canAcceptExtension(_extension: string) {
     return false;

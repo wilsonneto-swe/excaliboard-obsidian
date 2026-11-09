@@ -26,12 +26,14 @@ body:
     id: platform
     attributes:
       label: Platform
-      description: Choose every platform where it happens. Excaliboard runs on the desktop app.
+      description: Choose every platform where it happens. On phones and tablets, Excaliboard shows drawings read-only.
       multiple: true
       options:
         - macOS
         - Windows
         - Linux
+        - iOS or iPadOS
+        - Android
     validations:
       required: true
   - type: dropdown

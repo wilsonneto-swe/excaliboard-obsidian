@@ -1,6 +1,6 @@
 {
   "name": "excaliboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Draw in your vault with the Excalidraw editor. Each drawing stays a plain .excalidraw file that excalidraw.com opens, written only when you change it.",
   "author": "Wilson Neto",

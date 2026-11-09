@@ -46,6 +46,11 @@ export interface EditorProps {
   autoFocus: boolean;
   /** Asked again when a focus that had to wait for the canvas is applied: the tab may no longer be the active one. */
   canFocus: () => boolean;
+  /**
+   * READ-ONLY (view.ts): Excalidraw locked in view mode, which pans, zooms and opens links but edits nothing. Otherwise
+   * the host leaves view mode to Excalidraw, whose own switch (Alt+R) stays.
+   */
+  viewMode: boolean;
   /** Scroll and zoom to start at; null fits the drawing into the canvas. */
   viewState: ViewState | null;
   /** Every change, including scroll and selection; the first is the scene as loaded. */
@@ -112,6 +117,16 @@ const isTextField = (target: EventTarget | null): boolean =>
 
 // Obsidian owns the file, so Excalidraw's own open and save are hidden; image export stays.
 const UI_OPTIONS: Partial<UIOptions> = { canvasActions: { loadScene: false, saveToActiveFile: false } };
+// READ-ONLY: nothing that would change the drawing or export it.
+const VIEW_MODE_UI_OPTIONS: Partial<UIOptions> = {
+  canvasActions: {
+    ...UI_OPTIONS.canvasActions,
+    changeViewBackgroundColor: false,
+    clearCanvas: false,
+    export: false,
+    saveAsImage: false,
+  },
+};
 const rejectAllEmbeds = (): boolean => false; // NO-NETWORK: a drawing never loads a remote iframe
 
 /** Excalidraw's element links: `?element=<id of an element or group>`. */
@@ -137,21 +152,30 @@ export function linkedElementId(link: string): string | null {
 
 /**
  * The canvas area Excalidraw's toolbar and panels leave free, as its own "Zoom to fit" measures it, but relative to the
- * editor rather than the window, which also holds Obsidian's tabs.
+ * editor rather than the window, which also holds Obsidian's tabs. Excalidraw puts its toolbar at the top, or at the
+ * bottom in its phone layout (a phone, or a narrow tab), so each bar counts on the side it is on.
  */
 function freeArea(container: HTMLElement): { top: number; right: number; bottom: number; left: number } {
   const box = container.getBoundingClientRect();
-  const edge = (selector: string, side: 'top' | 'bottom' | 'left' | 'right'): number | null =>
+  const middle = box.top + box.height / 2;
+  let [top, bottom] = [0, 0];
+  // The toolbar, and the desktop layout's zoom, undo and redo. (The phone layout's .App-bottom-bar is no bar: it is as
+  // tall as the canvas, with the toolbar at its foot.)
+  for (const bar of container.querySelectorAll('.App-toolbar, .layer-ui__wrapper__footer-left')) {
+    const { top: barTop, bottom: barBottom, height } = bar.getBoundingClientRect();
+    if (!height) continue;
+    if (barTop + height / 2 < middle) top = Math.max(top, barBottom - box.top);
+    else bottom = Math.max(bottom, box.bottom - barTop);
+  }
+  const edge = (selector: string, side: 'left' | 'right'): number | null =>
     container.querySelector(selector)?.getBoundingClientRect()[side] ?? null;
-  const toolbar = edge('.App-toolbar', 'bottom');
-  const footer = edge('.layer-ui__wrapper__footer-left', 'top'); // zoom, undo and redo
   const sidebar = edge('.sidebar', 'left');
   const menu = edge('.App-menu__left', 'right');
   const margin = 16;
   return {
-    top: (toolbar === null ? 0 : toolbar - box.top) + margin,
+    top: top + margin,
     right: (sidebar === null ? 0 : box.right - sidebar) + margin,
-    bottom: (footer === null ? 0 : box.bottom - footer) + margin,
+    bottom: bottom + margin,
     left: (menu === null ? 0 : menu - box.left) + margin,
   };
 }
@@ -253,7 +277,8 @@ export function mountEditor(container: HTMLElement, props: EditorProps): EditorH
         name={name}
         onChange={onChange}
         excalidrawAPI={setApi}
-        UIOptions={UI_OPTIONS}
+        {...(props.viewMode ? { viewModeEnabled: true } : {})}
+        UIOptions={props.viewMode ? VIEW_MODE_UI_OPTIONS : UI_OPTIONS}
         validateEmbeddable={rejectAllEmbeds}
         onLinkOpen={onLinkOpen as never}
         generateLinkForSelection={elementLink}

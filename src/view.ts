@@ -3,6 +3,9 @@
  * what text to hand back, so a drawing is rewritten only after a real edit.
  *  - READ-ONLY: a file that doesn't parse (scene.ts PARSE), or that holds elements this Excalidraw would drop
  *    (editor.tsx CHECK), shows a panel and is never written: getViewData() returns the text exactly as read.
+ *    On phones and tablets (main.ts MOBILE) every drawing is read-only: Excalidraw locked in view mode, no change
+ *    counts as an edit, getViewData() returns the text as read, and writeData() refuses, Obsidian's own write included.
+ *    A version that changed on disk always replaces the one shown.
  *  - NO-EDITOR-NO-WRITE: until the editor reports the scene it loaded, getViewData() returns the text as read.
  *  - REAL-CHANGES: scroll, zoom and selection leave the fingerprint unchanged (scene.ts FINGERPRINT): no save. Nor is a
  *    picture that fails to load an edit: Excalidraw marks it failed (a new version of the image), and with no unsaved
@@ -80,6 +83,12 @@ const EXCALIDRAW_KEYS: [Modifier[], string][] = [
   [['Mod'], 'f'],
   [['Mod'], 'Enter'],
 ];
+/** READ-ONLY on phones and tablets: a button in the tab's header says so, and why. */
+const READ_ONLY_ICON = 'pencil-off';
+const READ_ONLY_TITLE = 'Read-only on this device';
+const READ_ONLY_NOTE =
+  'Drawings are read-only on phones and tablets: Excaliboard saves a drawing with a direct write to the file, which ' +
+  "only Obsidian's desktop app can make. Edit it on your computer; the changes show up here once they sync.";
 /** A link with a scheme (https:, mailto:, obsidian:, ...) opens outside the vault; a dangerous one never opens. */
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const BLOCKED_SCHEME = /^(about|javascript|data|vbscript|file):/i;
@@ -117,6 +126,11 @@ export class ExcalidrawFileView extends TextFileView {
     for (const [modifiers, key] of EXCALIDRAW_KEYS) this.scope.register(modifiers, key, () => true);
   }
 
+  /** READ-ONLY on phones and tablets (main.ts MOBILE). */
+  private get readOnly(): boolean {
+    return this.plugin.readOnly;
+  }
+
   getViewType(): string {
     return VIEW_TYPE;
   }
@@ -132,6 +146,7 @@ export class ExcalidrawFileView extends TextFileView {
   override async onOpen(): Promise<void> {
     await super.onOpen();
     this.contentEl.addClass(VIEW_CLASS);
+    if (this.readOnly) this.addAction(READ_ONLY_ICON, READ_ONLY_TITLE, () => new Notice(READ_ONLY_NOTE, 10000));
     this.registerEvent(this.app.workspace.on('css-change', () => this.handle?.setTheme(themeOf(this.contentEl))));
     // FOCUS: Obsidian reports the change a moment after the click that made it, which may have focused the tab's title
     // or one of Excalidraw's fields: that focus stays.
@@ -203,7 +218,7 @@ export class ExcalidrawFileView extends TextFileView {
   }
 
   canExport(): boolean {
-    return this.handle !== null && !this.loadFailed;
+    return this.handle !== null && !this.loadFailed && !this.readOnly;
   }
 
   exportImage(): void {
@@ -224,6 +239,7 @@ export class ExcalidrawFileView extends TextFileView {
   // SYNC-WRITE: replaces TextFileView's internal write step. If the synchronous write fails, Obsidian's own write
   // runs instead, with its error handling.
   async writeData(file: TFile, data: string, previous: string): Promise<void> {
+    if (this.readOnly) throw new Error(`${file.name} is read-only on this device`); // READ-ONLY, never reached
     try {
       this.plugin.writeNow(file.path, data, previous);
     } catch (error) {
@@ -233,6 +249,7 @@ export class ExcalidrawFileView extends TextFileView {
   }
 
   getViewData(): string {
+    if (this.readOnly) return this.text; // READ-ONLY
     const scene = this.savedFp !== null && !this.loadFailed ? this.handle?.getScene() : null;
     if (!scene || !this.original || !this.lib) return this.text; // NO-EDITOR-NO-WRITE
     const fp = fingerprint(scene);
@@ -277,6 +294,7 @@ export class ExcalidrawFileView extends TextFileView {
   }
 
   private isDirty(): boolean {
+    if (this.readOnly) return false; // READ-ONLY: nothing shown here is an edit to keep
     const scene = this.savedFp !== null ? this.handle?.getScene() : null;
     return !!scene && fingerprint(scene) !== this.savedFp;
   }
@@ -298,7 +316,7 @@ export class ExcalidrawFileView extends TextFileView {
     this.lastElements = scene.elements;
     if (fp === this.lastFp) return;
     this.lastFp = fp;
-    if (fp !== this.savedFp) this.requestSave();
+    if (fp !== this.savedFp && !this.readOnly) this.requestSave();
   }
 
   /** OUTSIDE-CHANGE with unsaved edits: keep them and save them, after backing up the disk version. */
@@ -353,6 +371,7 @@ export class ExcalidrawFileView extends TextFileView {
       name: this.file?.basename ?? 'Drawing',
       autoFocus: this.app.workspace.getActiveViewOfType(ExcalidrawFileView) === this, // FOCUS
       canFocus: () => this.mayFocus(),
+      viewMode: this.readOnly,
       viewState: path ? this.plugin.viewStates.get(path) : null,
       onChange: (s) => this.onSceneChange(s),
       onLinkOpen: (link, event) => this.openLink(link, event),

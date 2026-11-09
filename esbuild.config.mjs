@@ -6,6 +6,8 @@
 // - NO-NETWORK: the places where Excalidraw goes online by itself are made to stay offline (see NETWORK_PATCHES).
 // - NOTICES: main.js ends with Excaliboard's licence and THIRD-PARTY-NOTICES.md, because Obsidian installs no other
 //   file with it (`npm run notices` rewrites that file from what this build bundles).
+// - SIZE: main.js stays under 5 MB, the largest file Obsidian Sync's Standard plan syncs (see dropLocales), or the
+//   build fails.
 // - Our own code isn't minified, so the code a vault runs stays readable; the libraries ship as they are published.
 // `npm run dev` rebuilds on every change; set TEST_VAULT=/path/to/vault to build into its plugin folder instead.
 import esbuild from 'esbuild';
@@ -168,19 +170,41 @@ const embedFonts = {
   },
 };
 
+/**
+ * SIZE: Excalidraw's interface is in English unless the host passes it a language, which Excaliboard doesn't, so its
+ * translations never load; bundled, they would be 1.75 MB of main.js. Each becomes an empty module, with which
+ * Excalidraw would show its English text anyway.
+ */
+const MAX_MAIN_JS = 5_000_000;
+let localeCount = 0;
+const dropLocales = {
+  name: 'drop-excalidraw-locales',
+  setup(build) {
+    build.onResolve({ filter: /^\.\/locales\/[\w-]+\.js$/ }, (args) =>
+      /[\\/]@excalidraw[\\/]excalidraw[\\/]dist[\\/]prod[\\/]/.test(args.importer)
+        ? { path: args.path, namespace: 'excalidraw-locale' }
+        : undefined,
+    );
+    build.onLoad({ filter: /.*/, namespace: 'excalidraw-locale' }, () => {
+      localeCount++;
+      return { contents: 'export default {};', loader: 'js' };
+    });
+  },
+};
+
 /** styles.css: esbuild writes the CSS it collects (Excalidraw's and ours) to main.css; Obsidian loads styles.css. */
 const postBuild = {
   name: 'post-build',
   setup(build) {
     build.onStart(() => {
-      fontCounts.embedded = fontCounts.local = 0;
+      fontCounts.embedded = fontCounts.local = localeCount = 0;
       fontCounts.marked = [];
       networkCounts.clear();
     });
     build.onEnd(async (result) => {
       if (result.errors.length) return;
-      const js = await readFile(path.join(outdir, 'main.js'), 'utf8');
-      const problem = /["']\.\/fonts\/[^"']+\.woff2["']/.test(js)
+      const js = await readFile(path.join(outdir, 'main.js'));
+      const problem = /["']\.\/fonts\/[^"']+\.woff2["']/.test(js.toString('utf8'))
         ? 'A font path is left in main.js: Excalidraw would fetch it from its CDN.'
         : !fontCounts.embedded
           ? 'No font was embedded: has Excalidraw changed how it refers to its fonts?'
@@ -191,7 +215,12 @@ const postBuild = {
               )[0] ??
             NETWORK_PATCHES.filter(({ name }) => networkCounts.get(name) !== 1).map(
               ({ name }) => `NO-NETWORK: Excalidraw's code for "${name}" wasn't found once: has its build changed?`,
-            )[0]);
+            )[0] ??
+            (!localeCount
+              ? "SIZE: no translation of Excalidraw's was left out: has Excalidraw changed how it loads them?"
+              : js.length > MAX_MAIN_JS
+                ? `SIZE: main.js is ${js.length} bytes, over the ${MAX_MAIN_JS} that Obsidian Sync's Standard plan syncs.`
+                : undefined));
       if (problem) {
         await rm(path.join(outdir, 'main.css'), { force: true }); // no stylesheet from a build that failed
         throw new Error(problem);
@@ -200,6 +229,7 @@ const postBuild = {
       await rename(path.join(outdir, 'main.css'), path.join(outdir, 'styles.css'));
       if (outdir !== '.') await copyFile('manifest.json', path.join(outdir, 'manifest.json'));
       console.log(`fonts: ${fontCounts.embedded} embedded, ${fontCounts.local} left to the system`);
+      console.log(`main.js: ${js.length} bytes, ${localeCount} translations of Excalidraw's left out`);
     });
   },
 };
@@ -227,7 +257,7 @@ const options = {
   legalComments: 'none', // the footer holds every licence, where esbuild would keep only some
   sourcemap: watch ? 'inline' : false,
   logLevel: 'info',
-  plugins: [embedFonts, postBuild],
+  plugins: [embedFonts, dropLocales, postBuild],
 };
 
 await mkdir(outdir, { recursive: true });

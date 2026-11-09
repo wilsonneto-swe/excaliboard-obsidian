@@ -1,12 +1,22 @@
-// The plugin shell (src/main.ts) with the Obsidian stand-in: opening, new drawings, export, view state, and the
-// synchronous write and session backups on a real temporary folder.
+// The plugin shell (src/main.ts) with the Obsidian stand-in: opening, new drawings, export, view state, the
+// synchronous write and session backups on a real temporary folder, and the read-only phone and tablet app.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ExcaliboardPlugin, { hashPath, newDrawingName } from '../src/main';
 import { EMPTY_SCENE } from '../src/scene';
-import { App, Menu, Notice, TextFileView, TFile, TFolder } from './obsidian-mock';
+import {
+  App,
+  Menu,
+  MOBILE_APP,
+  MOBILE_EMULATION,
+  Notice,
+  Platform,
+  TextFileView,
+  TFile,
+  TFolder,
+} from './obsidian-mock';
 
 const DIR = 'custom-config/plugins/excaliboard'; // the config folder isn't always .obsidian (Vault#configDir)
 let app: App;
@@ -20,6 +30,7 @@ const make = async (
     stored: unknown;
     commands: { id: string; callback?: () => unknown; checkCallback?: (checking: boolean) => boolean }[];
     ribbon: { cb: () => unknown }[];
+    settingTabs: unknown[];
   };
   setup?.(plugin);
   await plugin.onload();
@@ -366,5 +377,99 @@ describe('SYNC-WRITE and BACKUP, on disk', () => {
     plugin.writeNow('a.excalidraw', 'mine', 'what Obsidian read'); // backs up the disk version, then writes
     expect(Notice.messages).toContain('Could not back up “a.excalidraw” before saving it. The save went ahead.');
     expect(readFileSync(join(base, 'a.excalidraw'), 'utf8')).toBe('mine');
+  });
+});
+
+describe('MOBILE: read-only on phones and tablets', () => {
+  const folderMenu = async () => {
+    const menu = new Menu();
+    app.workspace.trigger('file-menu', menu, await app.vault.createFolder('Studies'), 'file-explorer');
+    return menu.items.map((i) => i.title);
+  };
+
+  it.each([
+    ['the mobile app', MOBILE_APP],
+    ["the desktop app's mobile emulation", MOBILE_EMULATION],
+  ])('in %s, drawings open read-only: nothing creates or exports one, and there are no settings', async (_, flags) => {
+    Object.assign(Platform, flags);
+    const plugin = await make();
+    expect(plugin.readOnly).toBe(true);
+    expect(plugin.ownsExtension).toBe(true); // .excalidraw files still open in Excaliboard
+    expect(plugin.ribbon).toEqual([]);
+    expect(plugin.commands).toEqual([]);
+    expect(plugin.settingTabs).toEqual([]);
+    expect(await folderMenu()).toEqual([]);
+  });
+
+  it('in the desktop app, drawings are editable, with the ribbon button, the commands and the settings', async () => {
+    const plugin = await make();
+    expect(plugin.readOnly).toBe(false);
+    expect(plugin.ribbon).toHaveLength(1);
+    expect(plugin.commands.map((c) => c.id)).toEqual(['create-drawing', 'export-image']);
+    expect(plugin.settingTabs).toHaveLength(1);
+    expect(await folderMenu()).toEqual(['New drawing']);
+  });
+
+  it('still offers "Open in Excaliboard" while another plugin opens .excalidraw files', async () => {
+    Object.assign(Platform, MOBILE_APP);
+    await make((p) => (p.extensionsTakenBy = 'obsidian-excalidraw-plugin'));
+    const menu = new Menu();
+    app.workspace.trigger('file-menu', menu, app.vault.add('Board.excalidraw', EMPTY_SCENE), 'file-explorer');
+    expect(menu.items.map((i) => i.title)).toEqual(['Open in Excaliboard']);
+  });
+
+  it("never reaches Node: no write, no backup, no require('fs')", async () => {
+    Object.assign(Platform, MOBILE_APP);
+    const nodeRequire = vi.spyOn(window as unknown as { require: (id: string) => unknown }, 'require');
+    try {
+      const plugin = await make();
+      expect(() => plugin.writeNow('a.excalidraw', 'mine', 'theirs')).toThrow(
+        "Excaliboard doesn't write drawings on this device",
+      );
+      plugin.backup('a.excalidraw', 'the version on disk');
+      expect(nodeRequire).not.toHaveBeenCalled();
+      expect(Notice.messages).toEqual([]);
+    } finally {
+      nodeRequire.mockRestore();
+    }
+  });
+
+  it("reaches Node's fs only in the desktop app, even if a write were attempted elsewhere", async () => {
+    const plugin = await make(); // made in the desktop app, so writes are allowed...
+    Object.assign(Platform, MOBILE_APP); // ...then asked to write where Node isn't
+    const nodeRequire = vi.spyOn(window as unknown as { require: (id: string) => unknown }, 'require');
+    try {
+      expect(() => plugin.writeNow('a.excalidraw', 'mine')).toThrow(
+        "Excaliboard writes files only in Obsidian's desktop app",
+      );
+      expect(nodeRequire).not.toHaveBeenCalled();
+    } finally {
+      nodeRequire.mockRestore();
+    }
+  });
+
+  it('keeps scroll and zoom in data.json, as in the desktop app', async () => {
+    vi.useFakeTimers();
+    Object.assign(Platform, MOBILE_APP);
+    const plugin = await make((p) => (p.stored = { folder: 'Drawings' }));
+    plugin.rememberView('a.excalidraw', { scrollX: 1, scrollY: 2, zoom: 3 });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(plugin.stored).toMatchObject({
+      folder: 'Drawings', // the setting from the desktop app is kept
+      viewStates: { drawings: { 'a.excalidraw': { view: { scrollX: 1, scrollY: 2, zoom: 3 } } } },
+    });
+  });
+
+  it("doesn't ask for a newer Obsidian to save safely, as it saves nothing", async () => {
+    Object.assign(Platform, MOBILE_APP);
+    const proto = TextFileView.prototype as unknown as { writeData?: unknown };
+    const writeData = proto.writeData;
+    delete proto.writeData;
+    try {
+      await make();
+    } finally {
+      proto.writeData = writeData;
+    }
+    expect(Notice.messages).toEqual([]);
   });
 });

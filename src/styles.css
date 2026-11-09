@@ -11,6 +11,11 @@
   position: absolute;
   inset: 0;
 }
+/* On a phone, Obsidian's navigation bar floats over the bottom of the tab: Excalidraw's own bar stays above it, as
+   Obsidian's Bases views do. (Obsidian already moves the tab's content below its floating header.) */
+.is-phone .excaliboard-editor {
+  bottom: var(--view-bottom-spacing, 0px);
+}
 .excaliboard-error {
   padding: var(--size-4-8, 32px);
   max-width: 40em;

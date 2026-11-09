@@ -64,6 +64,7 @@ function mount(overrides: Partial<EditorProps> = {}, container = document.create
     name: 'Board',
     autoFocus: false,
     canFocus: () => true,
+    viewMode: false,
     viewState: null,
     onChange: () => {},
     onLinkOpen,
@@ -187,6 +188,33 @@ describe('the editor', () => {
     props.onChange(elements, { width: 1000, height: 800 }, {});
     const offsets = { top: 16, right: 16, bottom: 16, left: 16 }; // a margin around the toolbar and panels
     expect(api.scrolled).toEqual([[[elements[0]], { fitToContent: true, canvasOffsets: offsets }]]);
+  });
+
+  it("fits it into the area Excalidraw's bars leave free, its toolbar at the top or, in its phone layout, the bottom", () => {
+    /** An element of Excalidraw's interface, `top` to `bottom` pixels down a 1000 x 800 editor at the window's top left. */
+    const bar = (parent: HTMLElement, tag: string, cls: string, top: number, bottom: number) => {
+      const el = parent.appendChild(document.createElement(tag));
+      el.className = cls;
+      el.getBoundingClientRect = () => ({ top, bottom, height: bottom - top, left: 0, right: 1000 }) as DOMRect;
+      return el;
+    };
+    const fit = (layout: (container: HTMLElement) => void) => {
+      const container = document.createElement('div');
+      container.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 1000 }) as DOMRect;
+      layout(container);
+      api.scrolled = [];
+      const { props } = mount({}, container);
+      props.onChange([{ id: 'a', isDeleted: false }], { width: 1000, height: 800 }, {});
+      return (api.scrolled[0] as [unknown, { canvasOffsets: unknown }])[1].canvasOffsets;
+    };
+    const desktop = fit((c) => {
+      bar(c, 'div', 'App-toolbar', 10, 60);
+      bar(c, 'div', 'layer-ui__wrapper__footer-left', 750, 790);
+    });
+    expect(desktop).toEqual({ top: 76, right: 16, bottom: 66, left: 16 });
+    // As Excalidraw 0.18.1 lays it out: a bottom bar as tall as the canvas, with the toolbar at its foot.
+    const phone = fit((c) => bar(bar(c, 'div', 'App-bottom-bar', 0, 790), 'footer', 'App-toolbar', 740, 790));
+    expect(phone).toEqual({ top: 16, right: 16, bottom: 76, left: 16 });
   });
 
   it('starts a drawing with a saved view where it was left, without fitting it', () => {
@@ -325,5 +353,30 @@ describe('NO-NETWORK: a paste from a web page', () => {
     expect(hasWebPictures('<img src=" http://example.com/a.png">')).toBe(true);
     expect(hasWebPictures('<img src="data:image/png;base64,AAAA"><p>https://example.com</p>')).toBe(false);
     expect(hasWebPictures('')).toBe(false);
+  });
+});
+
+describe('READ-ONLY: view mode on phones and tablets', () => {
+  type ModeProps = { viewModeEnabled?: boolean; UIOptions: { canvasActions: Record<string, unknown> } };
+
+  it('locks Excalidraw in view mode, with nothing in its menu that would change or export the drawing', () => {
+    mount({ viewMode: true });
+    const props = rendered.at(-1)!.props as ModeProps;
+    expect(props.viewModeEnabled).toBe(true);
+    expect(props.UIOptions.canvasActions).toEqual({
+      loadScene: false,
+      saveToActiveFile: false,
+      changeViewBackgroundColor: false,
+      clearCanvas: false,
+      export: false,
+      saveAsImage: false,
+    });
+  });
+
+  it("in the desktop app, leaves view mode to Excalidraw's own switch and keeps image export", () => {
+    mount();
+    const props = rendered.at(-1)!.props as ModeProps;
+    expect('viewModeEnabled' in props).toBe(false);
+    expect(props.UIOptions.canvasActions).toEqual({ loadScene: false, saveToActiveFile: false });
   });
 });

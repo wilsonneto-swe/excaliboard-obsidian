@@ -1,5 +1,5 @@
 // The data safety rules (src/view.ts), one block per rule, against a fake editor and the Obsidian stand-in; then the
-// view's Obsidian integration: view state, links, export, keyboard and renames.
+// view's Obsidian integration: view state, links, export, keyboard and renames; and the read-only view of phones.
 import { newElementWith, restore, serializeAsJSON } from '@excalidraw/excalidraw';
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -116,6 +116,7 @@ type View = ExcalidrawFileView & TextFileView & { requestSave: ReturnType<typeof
 let editors: FakeEditor[];
 let app: App;
 let plugin: {
+  readOnly: boolean;
   loadEditor: ReturnType<typeof vi.fn>;
   backup: ReturnType<typeof vi.fn>;
   writeNow: ReturnType<typeof vi.fn>;
@@ -139,6 +140,7 @@ beforeEach(() => {
     },
   };
   plugin = {
+    readOnly: false,
     loadEditor: vi.fn(async () => lib),
     backup: vi.fn((path: string, text: string) => {
       backupLog.push({ path, text, writesBefore: app.vault.writes.length });
@@ -732,5 +734,82 @@ describe('Obsidian integration', () => {
   it("shows the file's basename as the tab title", async () => {
     const { view } = await open();
     expect(view.getDisplayText()).toBe('sample');
+  });
+});
+
+describe('READ-ONLY on phones and tablets', () => {
+  beforeEach(() => {
+    plugin.readOnly = true;
+  });
+
+  it('locks Excalidraw in view mode, and a button in the tab header says why', async () => {
+    const { view, editor } = await open();
+    expect(editor.props.viewMode).toBe(true);
+    expect(view.actions.map((a) => [a.icon, a.title])).toEqual([['pencil-off', 'Read-only on this device']]);
+    view.actions[0]!.callback(new MouseEvent('click'));
+    expect(Notice.messages).toEqual([expect.stringMatching(/^Drawings are read-only on phones and tablets/)]);
+  });
+
+  it('writes and backs up nothing: no change that Excalidraw reports counts as an edit', async () => {
+    const { file, view, editor } = await open();
+    editor.init();
+    editor.panZoomSelect();
+    editor.edit(); // view mode makes no edit; were one reported anyway, it would not be saved
+    editor.failPicture();
+    expect(view.requestSave).not.toHaveBeenCalled();
+    expect(view.getViewData()).toBe(SAMPLE);
+    await view.save();
+    await view.onClose();
+    expect(app.vault.writes).toEqual([]);
+    expect(plugin.writeNow).not.toHaveBeenCalled();
+    expect(plugin.backup).not.toHaveBeenCalled();
+    expect(await app.vault.read(file)).toBe(SAMPLE);
+  });
+
+  it('a version that changed on disk (a sync from the desktop) replaces the one shown, in place', async () => {
+    const { file, view, editor } = await open();
+    editor.init();
+    editor.edit(); // even after a reported change: there is no local edit to keep
+    app.vault.externalWrite(file, theirVersion());
+    await tick();
+    expect(editor.updates).toBe(1);
+    expect(editor.x()).toBe(300);
+    expect(view.getViewData()).toBe(theirVersion());
+    await view.save();
+    expect(app.vault.writes).toEqual([]);
+    expect(plugin.backup).not.toHaveBeenCalled();
+    expect(Notice.messages).toEqual([]);
+  });
+
+  it("refuses to write, Obsidian's own write included", async () => {
+    const { file, view } = await open();
+    await expect(view.writeData(file as never, '{}', SAMPLE)).rejects.toThrow(
+      'sample.excalidraw is read-only on this device',
+    );
+    expect(plugin.writeNow).not.toHaveBeenCalled();
+    expect(app.vault.writes).toEqual([]);
+  });
+
+  it('offers no image export', async () => {
+    const { view, editor } = await open();
+    editor.init();
+    expect(view.canExport()).toBe(false);
+    const menu = new Menu();
+    view.onPaneMenu(menu as never, 'more-options');
+    expect(menu.items).toEqual([]);
+  });
+
+  it('remembers scroll and zoom, as in the desktop app', async () => {
+    const { editor } = await open();
+    editor.init();
+    editor.panZoomSelect();
+    expect(plugin.rememberView).toHaveBeenLastCalledWith(PATH, expect.objectContaining({ zoom: 2 }));
+  });
+
+  it('in the desktop app, the editor is not locked and the header has no read-only button', async () => {
+    plugin.readOnly = false;
+    const { view, editor } = await open();
+    expect(editor.props.viewMode).toBe(false);
+    expect(view.actions).toEqual([]);
   });
 });

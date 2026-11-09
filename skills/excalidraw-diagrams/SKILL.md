@@ -299,7 +299,8 @@ Without Node, check by hand against "The file format" and "What never to write".
   lists `"excaliboard"` (else tell the user to turn it on in Settings > Community plugins; never edit `.obsidian/`
   yourself). A click on a `.excalidraw` file in the file explorer opens it in the editor; edits are saved into the
   file 2 seconds after a change. If another plugin (such as the community Excalidraw plugin) opens `.excalidraw`
-  files first, the file's menu has **Open in Excaliboard**. Excaliboard runs on Obsidian's desktop app.
+  files first, the file's menu has **Open in Excaliboard**. Excaliboard edits drawings in Obsidian's desktop app and
+  shows them read-only on phones and tablets.
 - **Links on boxes**: in Excaliboard a `[[Note]]` link opens the note (Cmd or Ctrl + click: in a new tab), and a web
   address opens in the browser: write it with its `https://`, as Excaliboard can take a bare address (`example.de`)
   for a note's name. Point note links at notes that exist: Obsidian creates a missing one when the link is clicked.

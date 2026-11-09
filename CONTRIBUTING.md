@@ -60,11 +60,17 @@ Or build straight into the test vault: `TEST_VAULT="/path/to/test vault" npm run
 Settings > Community plugins. After each rebuild, run **Reload app without saving** from the command palette. The
 drawings in [`examples/`](examples) are a quick way to fill the test vault.
 
+To see what a phone or tablet shows, run `app.emulateMobile(true)` in the developer console of the test vault
+(Cmd+Option+I, or Ctrl+Shift+I): Obsidian reloads with its mobile layout, where Excaliboard opens drawings read-only.
+`app.emulateMobile(false)` goes back. Before a release, also try a drawing on a real phone, where Obsidian has no Node
+and Excalidraw gets touch.
+
 ## Where things are
 
 - `src/`: the plugin. Each file starts with a comment that names its rules in capitals, which the code and the tests
   refer to.
-  - `main.ts`: the commands and menus, new drawings, and the synchronous write and session backups.
+  - `main.ts`: the commands and menus, new drawings, the synchronous write and session backups, and where drawings
+    are read-only (phones and tablets).
   - `view.ts`: the drawing view and its data safety rules.
   - `editor.tsx`: React and Excalidraw, which run only when the first drawing opens.
   - `scene.ts`: reading, writing and fingerprinting a drawing file.
@@ -75,8 +81,10 @@ drawings in [`examples/`](examples) are a quick way to fill the test vault.
 - `esbuild.config.mjs`: the build. It bundles the editor into `main.js`, embeds Excalidraw's fonts so the editor
   never fetches one, and makes the places where Excalidraw would go online stay offline (`NETWORK_PATCHES`: pictures
   at web addresses, pasted web pages, AI pages, SVG exports, CSS built from drawing data, library previews and
-  uploads). It fails if a font would be fetched from Excalidraw's CDN, or if a patch doesn't match exactly once.
-  `main.js` ends with `LICENSE` and `THIRD-PARTY-NOTICES.md`, since Obsidian installs no other file with it.
+  uploads). It leaves out Excalidraw's translations, which never load here, and fails if a font would be fetched from
+  Excalidraw's CDN, if a patch doesn't match exactly once, or if `main.js` grows past 5 MB, the largest file Obsidian
+  Sync's Standard plan syncs. `main.js` ends with `LICENSE` and `THIRD-PARTY-NOTICES.md`, since Obsidian installs no
+  other file with it.
 - `scripts/third-party-notices.mjs`: writes `THIRD-PARTY-NOTICES.md` from esbuild's metafile and the licence files
   in `node_modules`; what they don't hold (the fonts, for one) is written in the script, with its sources.
 - `stubs/mermaid-to-excalidraw/`: stands in for Excalidraw's Mermaid importer, which Excaliboard leaves out (see

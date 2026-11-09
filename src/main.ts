@@ -13,6 +13,8 @@
  *    Excaliboard even when another plugin claims .excalidraw files.
  *  - EXPORT: "Export image" (command, and the tab's menu in view.ts) opens Excalidraw's export dialog.
  *  - SYNC-WRITE and BACKUP: Node's fs, synchronously (writeNow, backup); the reasons are in view.ts.
+ *  - MOBILE: Node's fs exists only in Obsidian's desktop app, so on phones and tablets drawings open read-only
+ *    (view.ts READ-ONLY): Excalidraw in view mode, and no new drawings, export or settings. Node is never reached there.
  *  - VIEW-STATE: scroll and zoom per drawing in data.json (view-state.ts), following renames and deletes, written
  *    1.5 s after a change, or when Obsidian quits with a change still waiting. A data.json changed by sync is read again.
  */
@@ -20,6 +22,7 @@ import './styles.css';
 import {
   FileSystemAdapter,
   Notice,
+  Platform,
   Plugin,
   TFile,
   TFolder,
@@ -57,8 +60,17 @@ type NodeFs = {
   readdirSync(path: string): string[];
   unlinkSync(path: string): void;
 };
-/** Node's fs, which Obsidian's desktop app exposes to plugins (the plugin is desktop-only). */
-const nodeFs = (): NodeFs => (window as unknown as { require: (id: string) => NodeFs }).require('fs');
+/** Node's fs, which Obsidian's desktop app exposes to plugins, and only it (MOBILE). */
+const nodeFs = (): NodeFs => {
+  if (!Platform.isDesktopApp) throw new Error(`${PLUGIN_NAME} writes files only in Obsidian's desktop app`);
+  return (window as unknown as { require: (id: string) => NodeFs }).require('fs');
+};
+
+/**
+ * MOBILE: whether drawings open read-only here. They do in Obsidian's mobile app, which has no Node, and in the
+ * desktop app's mobile emulation (app.emulateMobile), which shows what a phone shows.
+ */
+export const isReadOnlyApp = (): boolean => !Platform.isDesktopApp || Platform.isMobile;
 
 /** How long view-state changes gather before data.json is written. */
 const DATA_SAVE_MS = 1500;
@@ -87,6 +99,8 @@ export default class ExcaliboardPlugin extends Plugin {
   viewStates: ViewStateStore = new ViewStateStore(null);
   /** OPEN: whether .excalidraw files open in Excaliboard (another plugin may have claimed them first). */
   ownsExtension = false;
+  /** MOBILE: drawings open read-only, and nothing creates, exports or writes one. */
+  readonly readOnly = isReadOnlyApp();
   private unloaded = false;
   private layoutClaimed = false;
   private editor: Promise<EditorModule> | null = null;
@@ -96,7 +110,10 @@ export default class ExcaliboardPlugin extends Plugin {
   override async onload(): Promise<void> {
     await this.readData();
     // minAppVersion is 1.15.0, the first Obsidian whose save the data safety rules can rely on (view.ts).
-    if (typeof (TextFileView.prototype as unknown as { writeData?: unknown }).writeData !== 'function') {
+    if (
+      !this.readOnly &&
+      typeof (TextFileView.prototype as unknown as { writeData?: unknown }).writeData !== 'function'
+    ) {
       console.warn(`${PLUGIN_NAME}: this Obsidian version has no TextFileView.writeData`);
       new Notice(`${PLUGIN_NAME} needs Obsidian 1.15 or later to save drawings safely. Please update Obsidian.`, 15000);
     }
@@ -121,25 +138,28 @@ export default class ExcaliboardPlugin extends Plugin {
         }),
       );
 
-    this.addRibbonIcon(ICON, 'Create new drawing', () => void this.createDrawing());
-    this.addCommand({
-      id: 'create-drawing',
-      name: 'Create new drawing',
-      icon: ICON,
-      callback: () => void this.createDrawing(),
-    });
-    this.addCommand({
-      id: 'export-image',
-      name: 'Export image',
-      icon: 'image-down',
-      checkCallback: (checking) => {
-        const view = this.app.workspace.getActiveViewOfType(ExcalidrawFileView);
-        if (!view?.canExport()) return false;
-        if (!checking) view.exportImage();
-        return true;
-      },
-    });
-    this.addSettingTab(new SettingsTab(this));
+    // MOBILE: where drawings are read-only, there is nothing to create or export, and the one setting is for new drawings.
+    if (!this.readOnly) {
+      this.addRibbonIcon(ICON, 'Create new drawing', () => void this.createDrawing());
+      this.addCommand({
+        id: 'create-drawing',
+        name: 'Create new drawing',
+        icon: ICON,
+        callback: () => void this.createDrawing(),
+      });
+      this.addCommand({
+        id: 'export-image',
+        name: 'Export image',
+        icon: 'image-down',
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(ExcalidrawFileView);
+          if (!view?.canExport()) return false;
+          if (!checking) view.exportImage();
+          return true;
+        },
+      });
+      this.addSettingTab(new SettingsTab(this));
+    }
 
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => this.onFileMenu(menu, file)));
     this.registerEvent(
@@ -204,6 +224,7 @@ export default class ExcaliboardPlugin extends Plugin {
 
   private onFileMenu(menu: Menu, file: TAbstractFile): void {
     if (file instanceof TFolder) {
+      if (this.readOnly) return; // MOBILE
       menu.addItem((item) =>
         item
           .setSection('action-primary')
@@ -289,7 +310,9 @@ export default class ExcaliboardPlugin extends Plugin {
 
   private fullPath(path: string): string {
     const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof FileSystemAdapter)) throw new Error(`${PLUGIN_NAME} needs Obsidian's desktop app`);
+    // MOBILE: Platform first, as the mobile app may not define FileSystemAdapter at all.
+    if (!Platform.isDesktopApp || !(adapter instanceof FileSystemAdapter))
+      throw new Error(`${PLUGIN_NAME} needs Obsidian's desktop app`);
     return adapter.getFullPath(normalizePath(path));
   }
 
@@ -300,6 +323,7 @@ export default class ExcaliboardPlugin extends Plugin {
    * Obsidian hasn't reported yet), that version is backed up before it is overwritten.
    */
   writeNow(path: string, text: string, expected?: string): void {
+    if (this.readOnly) throw new Error(`${PLUGIN_NAME} doesn't write drawings on this device`); // MOBILE
     const fs = nodeFs();
     const full = this.fullPath(path);
     if (expected !== undefined) {
@@ -328,6 +352,7 @@ export default class ExcaliboardPlugin extends Plugin {
    * keeping the newest five per drawing. Names are unique and in order, even for two backups in one millisecond.
    */
   backup(filePath: string, text: string): void {
+    if (this.readOnly) return; // MOBILE: nothing is written, so nothing needs a backup
     try {
       const fs = nodeFs();
       const dir = this.fullPath(`${this.manifest.dir ?? ''}/backups/${hashPath(filePath)}`);
